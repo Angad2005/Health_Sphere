@@ -1,38 +1,68 @@
-const isDev = !!(import.meta && import.meta.env && import.meta.env.DEV);
-export const BASE = isDev && (import.meta && import.meta.env && (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL))
-  ? (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL).replace(/\/$/, '')
-  : '';
-import { auth } from '../firebase';
+// src/services/api.js
+// Vite-compatible API client for Flask backend
 
-const DEV_HEADERS = { 'x-user-id': 'demo' }; // used when firebase-admin is not configured
+const isDev = import.meta.env.DEV;
+const BASE = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
-async function buildAuthHeaders() {
-  try {
-    const currentUser = auth.currentUser;
-    if (currentUser) {
-      const token = await currentUser.getIdToken();
-      return { Authorization: `Bearer ${token}` };
-    }
-  } catch (_) {}
-  return { ...DEV_HEADERS };
+// Default user ID for demo/dev mode
+const DEFAULT_USER_ID = 'demo';
+
+/**
+ * Get user ID (from localStorage, context, or fallback)
+ * In production, this should come from real auth (e.g., JWT, session)
+ */
+function getUserId() {
+  // Example: read from localStorage if you store it
+  // return localStorage.getItem('userId') || DEFAULT_USER_ID;
+  return DEFAULT_USER_ID; // For now, hardcode to 'demo' to match Flask
 }
+
+/**
+ * Build headers with x-user-id
+ */
+function getHeaders(extraHeaders = {}) {
+  return {
+    'Content-Type': 'application/json',
+    'x-user-id': getUserId(),
+    ...extraHeaders,
+  };
+}
+
+/**
+ * Wrapper for JSON fetch with error handling
+ */
+async function jsonFetch(url, options = {}) {
+  const res = await fetch(url, {
+    ...options,
+    headers: getHeaders(options.headers),
+  });
+
+  let data;
+  const text = await res.text();
+  try {
+    data = text ? JSON.parse(text) : {};
+  } catch (e) {
+    data = { error: 'Invalid JSON response' };
+  }
+
+  if (!res.ok) {
+    const msg = data?.error || data?.message || `HTTP ${res.status}`;
+    const err = new Error(msg);
+    err.status = res.status;
+    err.body = data;
+    throw err;
+  }
+
+  return data;
+}
+
+// --- Public API functions ---
 
 export async function analyze(body) {
-  const res = await fetch(`${BASE}/api/analyze`, {
+  return jsonFetch(`${BASE}/api/analyze`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...DEV_HEADERS },
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
-  return res.json();
-}
-
-export async function analyzePython(body, url = 'http://localhost:8090') {
-  const res = await fetch(`${url.replace(/\/$/, '')}/analyze`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body)
-  });
-  return res.json();
 }
 
 export async function aiHealth() {
@@ -40,36 +70,25 @@ export async function aiHealth() {
   return res.json();
 }
 
-export async function pdfExtract(url, { useOcr, lang } = {}) {
-  const res = await fetch(`${BASE}/api/pdf-extract`, {
+export async function pdfExtract(url, { useOcr = false, lang = 'en' } = {}) {
+  return jsonFetch(`${BASE}/api/pdf-extract`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...DEV_HEADERS },
-    body: JSON.stringify({ url, useOcr, lang })
+    body: JSON.stringify({ url, useOcr, lang }),
   });
-  const text = await res.text();
-  let json = {};
-  try { json = text ? JSON.parse(text) : {}; } catch (_) { json = {}; }
-  if (!res.ok) {
-    const msg = json?.error || json?.message || `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.body = json;
-    throw err;
-  }
-  return json;
 }
 
 export async function processReport(file) {
-  const form = new FormData();
-  form.append('file', file);
+  const formData = new FormData();
+  formData.append('file', file);
+
   const res = await fetch(`${BASE}/functions/processReport`, {
     method: 'POST',
-    headers: { ...DEV_HEADERS },
-    body: form
+    headers: { 'x-user-id': getUserId() }, // multipart/form-data doesn't need Content-Type
   });
   const text = await res.text();
   let json = {};
-  try { json = text ? JSON.parse(text) : {}; } catch (_) { json = {}; }
+  try { json = text ? JSON.parse(text) : {}; } catch (_) {}
+
   if (!res.ok) {
     const msg = json?.error || json?.message || `HTTP ${res.status}`;
     const err = new Error(msg);
@@ -80,164 +99,113 @@ export async function processReport(file) {
   return json;
 }
 
-// Progress-capable upload with cancel support using XMLHttpRequest
-// Usage:
-// const controller = new AbortController();
-// processReportWithProgress(file, { onProgress: (p) => {}, signal: controller.signal })
-//   .then(...)
-//   .catch(...);
+// Progress-capable upload (unchanged logic, but simplified headers)
 export function processReportWithProgress(file, { onProgress, signal } = {}) {
   return new Promise((resolve, reject) => {
-    try {
-      const xhr = new XMLHttpRequest();
-      const form = new FormData();
-      form.append('file', file);
+    const xhr = new XMLHttpRequest();
+    const form = new FormData();
+    form.append('file', file);
 
-      xhr.open('POST', `${BASE}/functions/processReport`, true);
-      xhr.setRequestHeader('x-user-id', DEV_HEADERS['x-user-id']);
+    xhr.open('POST', `${BASE}/functions/processReport`, true);
+    xhr.setRequestHeader('x-user-id', getUserId());
 
-      if (xhr.upload && typeof onProgress === 'function') {
-        xhr.upload.onprogress = (evt) => {
-          if (!evt.lengthComputable) return;
+    if (xhr.upload && typeof onProgress === 'function') {
+      xhr.upload.onprogress = (evt) => {
+        if (evt.lengthComputable) {
           const percent = Math.min(99, Math.round((evt.loaded / evt.total) * 100));
           onProgress(percent);
-        };
-      }
-
-      xhr.onreadystatechange = () => {
-        if (xhr.readyState === 4) {
-          // DONE
-          if (xhr.status >= 200 && xhr.status < 300) {
-            try {
-              const json = JSON.parse(xhr.responseText || '{}');
-              resolve(json);
-            } catch (e) {
-              resolve({ ok: true });
-            }
-          } else {
-            let message = 'Upload failed';
-            try {
-              const err = JSON.parse(xhr.responseText || '{}');
-              message = err?.error || err?.message || message;
-              // attach details for UI hints
-              const error = new Error(message);
-              error.status = xhr.status;
-              error.body = err;
-              return reject(error);
-            } catch (_) {}
-            const error = new Error(message);
-            error.status = xhr.status;
-            reject(error);
-          }
         }
       };
+    }
 
-      xhr.onerror = () => reject(new Error('Network error during upload'));
-      xhr.onabort = () => reject(new Error('Upload canceled'));
-
-      if (signal) {
-        if (signal.aborted) {
-          xhr.abort();
+    xhr.onreadystatechange = () => {
+      if (xhr.readyState === 4) {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          try {
+            const json = JSON.parse(xhr.responseText || '{}');
+            resolve(json);
+          } catch {
+            resolve({ ok: true });
+          }
         } else {
-          const onAbort = () => xhr.abort();
-          signal.addEventListener('abort', onAbort, { once: true });
+          let message = 'Upload failed';
+          try {
+            const err = JSON.parse(xhr.responseText || '{}');
+            message = err?.error || err?.message || message;
+            const error = new Error(message);
+            error.status = xhr.status;
+            error.body = err;
+            reject(error);
+          } catch {
+            reject(new Error(message));
+          }
         }
       }
+    };
 
-      xhr.send(form);
-    } catch (err) {
-      reject(err);
+    xhr.onerror = () => reject(new Error('Network error'));
+    xhr.onabort = () => reject(new Error('Upload canceled'));
+
+    if (signal) {
+      if (signal.aborted) {
+        xhr.abort();
+      } else {
+        const onAbort = () => xhr.abort();
+        signal.addEventListener('abort', onAbort, { once: true });
+      }
     }
+
+    xhr.send(form);
   });
 }
 
 export async function analyzeCheckinApi(payload) {
-  const res = await fetch(`${BASE}/functions/analyzeCheckin`, {
+  return jsonFetch(`${BASE}/functions/analyzeCheckin`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...DEV_HEADERS },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
-  return res.json();
 }
 
-export async function findNearbyAmbulance(lat, lng, radiusMeters) {
+export async function findNearbyAmbulance(lat, lng, radiusMeters = 5000) {
   const url = new URL(`${BASE}/functions/findNearbyAmbulance`);
   url.searchParams.set('lat', String(lat));
   url.searchParams.set('lng', String(lng));
-  if (Number.isFinite(radiusMeters)) {
-    url.searchParams.set('radiusMeters', String(radiusMeters));
-  }
-  const res = await fetch(url.toString());
-  return res.json();
+  url.searchParams.set('radiusMeters', String(radiusMeters));
+  return jsonFetch(url.toString());
 }
 
-export async function submitFeedback(feedback, userId = 'demo') {
-  const res = await fetch(`${BASE}/functions/submitFeedback`, {
+export async function submitFeedback(feedback) {
+  return jsonFetch(`${BASE}/functions/submitFeedback`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...DEV_HEADERS },
-    body: JSON.stringify({ userId, feedback })
+    body: JSON.stringify({ feedback }),
   });
-  return res.json();
 }
 
 export async function chatWithGeminiApi(payload, { signal } = {}) {
-  const res = await fetch(`${BASE}/functions/chat`, {
+  return jsonFetch(`${BASE}/functions/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await buildAuthHeaders()) },
     body: JSON.stringify(payload),
-    signal
+    signal,
   });
-  const text = await res.text();
-  let json = null;
-  try { json = text ? JSON.parse(text) : {}; } catch (_) { json = {}; }
-  if (!res.ok) {
-    const msg = json?.error || json?.message || `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.body = json;
-    throw err;
-  }
-  return json;
 }
 
-export async function fetchRiskSeries(userId) {
+export async function fetchRiskSeries(userId = getUserId()) {
   const url = new URL(`${BASE}/functions/riskSeries`);
-  if (userId) {
-    url.searchParams.set('userId', String(userId));
-  }
-  const res = await fetch(url.toString(), {
-    headers: { ...(await buildAuthHeaders()) }
-  });
-  const text = await res.text();
-  let json = {};
-  try { json = text ? JSON.parse(text) : {}; } catch (_) { json = {}; }
-  if (!res.ok) {
-    const msg = json?.error || json?.message || `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.body = json;
-    throw err;
-  }
-  return json;
+  url.searchParams.set('userId', String(userId));
+  return jsonFetch(url.toString());
+}
+
+// New: fetch user check-ins from Flask
+export async function fetchCheckins(userId = getUserId(), limit = 30) {
+  const url = new URL(`${BASE}/api/checkins`);
+  url.searchParams.set('userId', String(userId));
+  url.searchParams.set('limit', String(limit));
+  return jsonFetch(url.toString());
 }
 
 export async function generateReportSummary(extractedData, ocrText) {
-  const res = await fetch(`${BASE}/functions/generateReportSummary`, {
+  return jsonFetch(`${BASE}/functions/generateReportSummary`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', ...(await buildAuthHeaders()) },
-    body: JSON.stringify({ extractedData, ocrText })
+    body: JSON.stringify({ extractedData, ocrText }),
   });
-  const text = await res.text();
-  let json = {};
-  try { json = text ? JSON.parse(text) : {}; } catch (_) { json = {}; }
-  if (!res.ok) {
-    const msg = json?.error || json?.message || `HTTP ${res.status}`;
-    const err = new Error(msg);
-    err.status = res.status;
-    err.body = json;
-    throw err;
-  }
-  return json;
 }
-
-

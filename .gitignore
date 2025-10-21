@@ -137,3 +137,6 @@ models/*.onnx
 /.clinerules/
 /.cursor/
 /CLAUDE.md
+
+
+vani/
