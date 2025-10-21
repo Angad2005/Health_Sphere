@@ -1,89 +1,69 @@
-import { useEffect, useState, useCallback } from 'react';
-import { auth, db, observeAuthState } from '../firebase';
-import {
-  signInWithEmailAndPassword,
-  createUserWithEmailAndPassword,
-  signOut,
-  getRedirectResult,
-  updateProfile,
-} from 'firebase/auth';
-import { doc, getDoc, setDoc, serverTimestamp } from 'firebase/firestore';
+// src/hooks/useUserAuth.js
+import { useState, useEffect, useCallback } from 'react';
 
+// Demo user ID — matches Flask's fallback in get_user_id()
+const DEMO_USER_ID = 'demo';
+
+/**
+ * Simple auth hook for demo mode.
+ * In production, this would integrate with a real auth system (e.g., JWT via /login).
+ */
 export default function useUserAuth() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
-  
 
-  const upsertUserProfile = useCallback(async (firebaseUser) => {
-    try {
-      if (!firebaseUser || !db) return;
-      const userRef = doc(db, 'users', firebaseUser.uid);
-      const snap = await getDoc(userRef);
-      const base = {
-        uid: firebaseUser.uid,
-        email: firebaseUser.email || null,
-        displayName: firebaseUser.displayName || null,
-        photoURL: firebaseUser.photoURL || null,
-        phoneNumber: firebaseUser.phoneNumber || null,
-        providerIds: (firebaseUser.providerData || []).map(p => p.providerId),
-        updatedAt: serverTimestamp(),
-      };
-      if (snap.exists()) {
-        await setDoc(userRef, base, { merge: true });
-      } else {
-        await setDoc(userRef, { ...base, createdAt: serverTimestamp(), role: 'user' }, { merge: true });
-      }
-    } catch (_) {}
-  }, []);
-
+  // Initialize auth (auto-login as demo user)
   useEffect(() => {
-    const unsub = observeAuthState(async (firebaseUser) => {
-      setUser(firebaseUser || null);
-      setLoading(false);
-    });
-    // Remove Google redirect handling
-    return () => unsub && unsub();
-  }, [upsertUserProfile]);
+    const initAuth = () => {
+      try {
+        // Simulate async check (e.g., validate stored session)
+        const timer = setTimeout(() => {
+          setUser({ uid: DEMO_USER_ID });
+          setLoading(false);
+        }, 200); // Small delay to simulate network
 
-  const login = useCallback(async ({ email, password }) => {
-    const cred = await signInWithEmailAndPassword(auth, email, password);
-    setUser(cred.user);
-    return cred.user;
+        return () => clearTimeout(timer);
+      } catch (err) {
+        console.error('Auth init error:', err);
+        setUser(null);
+        setLoading(false);
+      }
+    };
+
+    initAuth();
   }, []);
 
-  const signup = useCallback(async ({ email, password, name }) => {
-    const cred = await createUserWithEmailAndPassword(auth, email, password);
-    if (name) {
-      try { await updateProfile(cred.user, { displayName: name }); } catch (_) {}
+  // Login: in demo mode, just sets user to 'demo'
+  const login = useCallback(async ({ email, password }) => {
+    // Optional: validate email/password if you want basic demo login
+    // For now: accept any non-empty credentials
+    if (!email || !password) {
+      throw new Error('Email and password are required');
     }
-    await upsertUserProfile(cred.user);
-    setUser({ ...cred.user });
-    return cred.user;
-  }, [upsertUserProfile]);
+    const demoUser = { uid: DEMO_USER_ID, email };
+    setUser(demoUser);
+    return demoUser;
+  }, []);
 
+  // Signup: same as login in demo mode
+  const signup = useCallback(async ({ email, password, name }) => {
+    if (!email || !password) {
+      throw new Error('Email and password are required');
+    }
+    const demoUser = { uid: DEMO_USER_ID, email, displayName: name || email.split('@')[0] };
+    setUser(demoUser);
+    return demoUser;
+  }, []);
+
+  // Logout: clear user
   const logout = useCallback(async () => {
-    await signOut(auth);
     setUser(null);
   }, []);
 
+  // getIdToken: returns null (not used in Flask demo mode)
   const getIdToken = useCallback(async () => {
-    if (!auth.currentUser) return null;
-    return auth.currentUser.getIdToken();
+    return null; // Flask uses x-user-id, not Bearer tokens
   }, []);
-
-  
-
-  
-
-  
-
-  
-
-  
-
-  
 
   return { user, loading, login, signup, logout, getIdToken };
 }
-
-

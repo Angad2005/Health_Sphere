@@ -1,3 +1,4 @@
+// src/pages/LoginPage.jsx
 import React, { useEffect, useState } from 'react';
 import Seo from '../components/Seo';
 import Input from '../components/ui/Input';
@@ -6,49 +7,49 @@ import { Card, CardContent } from '../components/ui/Card';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useToast } from '../components/ui/ToastProvider';
-import getFriendlyAuthError from '../utils/firebaseErrorMessages';
 
 export default function LoginPage() {
   const { user, login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
-  
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const { notify } = useToast();
 
   const navigate = useNavigate();
   const location = useLocation();
-  const from = location.state?.from?.pathname || '/';
+  const from = location.state?.from?.pathname || '/dashboard';
 
   // Redirect if already logged in
   useEffect(() => {
-    if (user) navigate(from, { replace: true });
+    if (user) {
+      navigate(from, { replace: true });
+    }
   }, [user, from, navigate]);
 
-  // Email/password login
   async function handleEmailLogin(e) {
     e.preventDefault();
     setError('');
     setSubmitting(true);
+
     try {
+      // Demo: accept any non-empty email/password
+      if (!email.trim() || !password.trim()) {
+        throw new Error('Please enter both email and password.');
+      }
+
       await login({ email, password });
+      notify('Signed in successfully!', 'success');
       navigate(from, { replace: true });
     } catch (err) {
-      const friendly = getFriendlyAuthError(err);
-      setError(friendly);
-      notify(friendly, 'error');
+      const message = err.message || 'Failed to sign in. Please try again.';
+      setError(message);
+      notify(message, 'error');
     } finally {
       setSubmitting(false);
     }
   }
-
-  
-
-  
-
-  
 
   if (user) return null;
 
@@ -65,17 +66,19 @@ export default function LoginPage() {
         <div className="grid md:grid-cols-2 gap-6 items-stretch">
           <div className="hidden md:flex relative overflow-hidden rounded-xl border border-brand-100 dark:border-slate-800 bg-white dark:bg-slate-900 p-8">
             <div className="relative z-10 my-auto">
-              <div className="inline-flex items-center gap-2 rounded-full border border-brand-200/70 dark:border-slate-700 px-3 py-1 text-xs text-brand-700 dark:text-blue-200 bg-brand-50/60 dark:bg-slate-800 mb-4">Secure by Firebase Auth</div>
+              <div className="inline-flex items-center gap-2 rounded-full border border-brand-200/70 dark:border-slate-700 px-3 py-1 text-xs text-brand-700 dark:text-blue-200 bg-brand-50/60 dark:bg-slate-800 mb-4">
+                Privacy-First Health Tracking
+              </div>
               <h2 className="text-3xl font-semibold tracking-tight text-slate-900 dark:text-slate-100">Your health, simplified</h2>
               <p className="mt-2 text-slate-600 dark:text-slate-400">Fast access to your dashboard, daily check-ins, and reports.</p>
               <ul className="mt-6 space-y-3 text-slate-700 dark:text-slate-300">
                 <li className="flex items-start gap-3">
                   <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-emerald-100 text-emerald-700 dark:bg-emerald-900/30 dark:text-emerald-300">✓</span>
-                  Quick, password-only sign in
+                  Simple email & password sign in
                 </li>
                 <li className="flex items-start gap-3">
                   <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-blue-100 text-blue-700 dark:bg-blue-900/30 dark:text-blue-300">✓</span>
-                  Privacy-first, no social tracking
+                  No third-party tracking
                 </li>
                 <li className="flex items-start gap-3">
                   <span className="mt-1 inline-flex h-5 w-5 items-center justify-center rounded-full bg-violet-100 text-violet-700 dark:bg-violet-900/30 dark:text-violet-300">✓</span>
@@ -104,13 +107,28 @@ export default function LoginPage() {
                       <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4h16v16H4z" fill="none"></path><path d="M22 6l-10 7L2 6" /></svg>
                       </span>
-                      <Input id="email" type="email" placeholder="you@example.com" value={email} onChange={e => setEmail(e.target.value)} autoComplete="email" disabled={submitting} className="pl-10" />
+                      <Input
+                        id="email"
+                        type="email"
+                        placeholder="you@example.com"
+                        value={email}
+                        onChange={e => setEmail(e.target.value)}
+                        autoComplete="email"
+                        disabled={submitting}
+                        className="pl-10"
+                        required
+                      />
                     </div>
                   </div>
                   <div className="space-y-1">
                     <div className="flex items-center justify-between">
                       <label className="block text-sm font-medium text-slate-700 dark:text-slate-300" htmlFor="password">Password</label>
-                      <button type="button" onClick={() => setShowPassword(v => !v)} className="text-xs text-blue-600 hover:underline disabled:opacity-50" disabled={submitting}>
+                      <button
+                        type="button"
+                        onClick={() => setShowPassword(v => !v)}
+                        className="text-xs text-blue-600 hover:underline disabled:opacity-50"
+                        disabled={submitting}
+                      >
                         {showPassword ? 'Hide' : 'Show'}
                       </button>
                     </div>
@@ -118,7 +136,17 @@ export default function LoginPage() {
                       <span className="pointer-events-none absolute inset-y-0 left-0 flex items-center pl-3 text-slate-400">
                         <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 17a2 2 0 1 0 0-4 2 2 0 0 0 0 4Z"/><path d="M19 11V7a7 7 0 0 0-14 0v4"/><rect x="5" y="11" width="14" height="10" rx="2"/></svg>
                       </span>
-                      <Input id="password" type={showPassword ? 'text' : 'password'} placeholder="••••••••" value={password} onChange={e => setPassword(e.target.value)} autoComplete="current-password" disabled={submitting} className="pl-10" />
+                      <Input
+                        id="password"
+                        type={showPassword ? 'text' : 'password'}
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={e => setPassword(e.target.value)}
+                        autoComplete="current-password"
+                        disabled={submitting}
+                        className="pl-10"
+                        required
+                      />
                     </div>
                   </div>
                   <Button type="submit" className="w-full inline-flex items-center justify-center gap-2" disabled={submitting}>

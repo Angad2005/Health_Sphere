@@ -1,3 +1,4 @@
+// src/pages/DailyCheckin.jsx
 import React, { useEffect, useMemo, useState } from 'react';
 import { riskFromAnswersV2 } from '../utils/scoreHelpers';
 import Button from '../components/ui/Button';
@@ -6,27 +7,26 @@ import Textarea from '../components/ui/Textarea';
 import Spinner from '../components/ui/Spinner';
 import { useToast } from '../components/ui/ToastProvider';
 import { useAuth } from '../context/AuthContext';
-import { db } from '../firebase';
-import { addDoc, collection, getDocs, query, where, serverTimestamp, Timestamp, orderBy, limit } from 'firebase/firestore';
 import RiskChart from '../components/RiskChart';
-import { analyzeCheckinApi, aiHealth, fetchRiskSeries } from '../services/api';
+import { analyzeCheckinApi, aiHealth, fetchRiskSeries, fetchCheckins } from '../services/api';
 
 export default function DailyCheckin() {
   const { notify } = useToast();
   const { user, loading: authLoading } = useAuth();
 
   const [answers, setAnswers] = useState({
-    q1: '', // Sleep & Energy
-    q2: '', // Pain or Discomfort
-    q2_specify: '',
-    q3: '', // Heart & Respiratory - yes/no
-    q3_severity: '',
-    q4: '', // Digestive & Temperature
-    q4_specify: '',
-    q5: '', // Mental & Emotional
-    q6_activity: '', // Physical Activity intensity
-    q6_hydration: '', // Hydration level
-    q6_diet: '', // Diet adherence
+    ns_q1: '',
+    ns_q2: '',
+    ns_q3: '',
+    ns_q4: '',
+    ns_q5: '',
+    ns_q6: '',
+    ns_q7: '',
+    ns_q8: '',
+    ns_q9: '',
+    ns_q10: '',
+    ns_q11: '',
+    ns_q12: '',
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -44,6 +44,7 @@ export default function DailyCheckin() {
   const [useScipyWinsorize, setUseScipyWinsorize] = useState(true);
   const [forceLocal, setForceLocal] = useState(false);
 
+  // Load analysis prefs
   useEffect(() => {
     try {
       const saved = JSON.parse(localStorage.getItem('analysisPrefs') || '{}');
@@ -55,6 +56,7 @@ export default function DailyCheckin() {
       }
     } catch (_) {}
   }, []);
+
   useEffect(() => {
     try {
       localStorage.setItem('analysisPrefs', JSON.stringify({ topK, explainMethod, useScipyWinsorize, forceLocal }));
@@ -62,131 +64,85 @@ export default function DailyCheckin() {
   }, [topK, explainMethod, useScipyWinsorize, forceLocal]);
 
   const isValid = useMemo(() => {
-    // New MCQ set
     const requiredKeys = ['ns_q1','ns_q2','ns_q3','ns_q4','ns_q5','ns_q6','ns_q7','ns_q8','ns_q9','ns_q10','ns_q11','ns_q12'];
-    for (const k of requiredKeys) {
-      if (!answers[k]) return false;
-    }
-    return true;
+    return requiredKeys.every(k => answers[k]);
   }, [answers]);
 
-  function todayRange() {
-    const now = new Date();
-    const start = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0, 0);
-    const end = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1, 0, 0, 0, 0);
-    return { start: Timestamp.fromDate(start), end: Timestamp.fromDate(end) };
-  }
-
-  useEffect(() => {
-    async function checkToday() {
-      if (!db || !user) return;
-      const { start, end } = todayRange();
-      const ref = collection(db, 'users', user.uid, 'dailyCheckins');
-      // Simple range query to avoid additional index requirements
-      const q = query(ref, where('date', '>=', start), where('date', '<', end));
-      try {
-        const snap = await getDocs(q);
-        if (!snap.empty) {
+  // Check if user submitted today
+  async function checkSubmittedToday(userId) {
+    try {
+      const items = await fetchCheckins(userId, 1); // fetch latest
+      if (items.length > 0) {
+        const latest = items[0];
+        const today = new Date();
+        const checkinDate = new Date(latest.date);
+        const isToday = checkinDate.toDateString() === today.toDateString();
+        if (isToday) {
           setSubmittedToday(true);
-          setLatestSubmission(snap.docs[0].data());
-        } else {
-          setSubmittedToday(false);
-          setLatestSubmission(null);
+          setLatestSubmission(latest);
+          return true;
         }
-      } catch (err) {
-        console.error('[DailyCheckin] checkToday error:', err);
       }
+      setSubmittedToday(false);
+      setLatestSubmission(null);
+      return false;
+    } catch (err) {
+      console.error('[DailyCheckin] checkSubmittedToday error:', err);
+      return false;
     }
-    checkToday();
-  }, [user]);
-
-  // Compute a simple well-being score [0..1] from answers
-  function scoreFromAnswers(a) {
-    if (!a) return 0.5;
-    const map4 = (v) => ({
-      'None': 1.0,
-      'Normal': 1.0,
-      'Mild': 0.7,
-      'Slight irregularity – mild constipation/diarrhea': 0.7,
-      'Slight – minor discomfort or frequency change': 0.7,
-      'Moderate': 0.4,
-      'Moderate – noticeable, affects tasks': 0.4,
-      'Moderate – interfered with tasks': 0.4,
-      'Moderate – affected meals': 0.4,
-      'Moderate – frequent or loose stools': 0.4,
-      'Moderate – frequent or painful urination': 0.4,
-      'Severe': 0.2,
-      'Severe – persistent pain': 0.2,
-      'Severe – unable to perform daily activities': 0.2,
-      'Severe – persistent vomiting': 0.2,
-      'Severe – could barely perform activities': 0.2,
-      'Severe – high fever (>102°F / 38.8°C)': 0.2,
-      'Severe – persistent cough or severe breathing issues': 0.2,
-      'Severe – persistent diarrhea/constipation': 0.2,
-      'Severe – inability to urinate normally or severe discomfort': 0.2,
-      'Severe – bleeding, large lesions, or non-healing wounds': 0.2,
-      'Severe – fainting or inability to stand': 0.2,
-    })[v] ?? 0.5;
-    const parts = [
-      map4(a.ns_q1), map4(a.ns_q2), map4(a.ns_q3), map4(a.ns_q4), map4(a.ns_q5),
-      map4(a.ns_q6), map4(a.ns_q7), map4(a.ns_q8), map4(a.ns_q9), map4(a.ns_q10),
-      map4(a.ns_q11), map4(a.ns_q12)
-    ];
-    const avg = parts.reduce((s, v) => s + v, 0) / parts.length;
-    return Math.max(0, Math.min(1, Number(avg.toFixed(3))));
   }
 
-  // Load recent history and compute trend (prefers Python risk if available)
-  useEffect(() => {
-    async function loadHistory() {
-      if (!db || !user) return;
+  // Load history and compute trend
+  async function loadHistory(userId) {
+    try {
+      const items = await fetchCheckins(userId, 30);
+      const reversed = items.slice().reverse();
+      let pts = reversed.map(it => riskFromAnswersV2(it.answers));
+      let lbls = reversed.map(it => new Date(it.date).toLocaleDateString());
+
+      // Prefer backend risk series if AI is available
       try {
-        const ref = collection(db, 'users', user.uid, 'dailyCheckins');
-        const q = query(ref, orderBy('date', 'desc'), limit(30));
-        const snap = await getDocs(q);
-        const items = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-        const reversed = items.slice().reverse();
-        let pts = reversed.map(it => riskFromAnswersV2(it.answers));
-        let lbls = reversed.map(it => (it?.date?.toDate ? it.date.toDate().toLocaleDateString() : ''));
-
-        // If Python AI is available, request risk series and prefer it regardless of length
-        try {
-          if (aiStatus?.python?.available) {
-            const r = await fetchRiskSeries(user.uid);
-            if (r && r.ok && Array.isArray(r.points) && r.points.length > 0) {
-              pts = r.points; // assume already higher = higher risk
-              if (Array.isArray(r.labels) && r.labels.length === r.points.length) {
-                lbls = r.labels.map(s => {
-                  try { return new Date(s).toLocaleDateString(); } catch (_) { return s; }
-                });
-              } else {
-                lbls = r.points.map((_, i) => `T${i + 1}`);
-              }
-            }
+        if (aiStatus?.python?.available) {
+          const r = await fetchRiskSeries(userId);
+          if (r.ok && Array.isArray(r.points) && r.points.length > 0) {
+            pts = r.points;
+            lbls = r.labels.map(s => {
+              try { return new Date(s).toLocaleDateString(); } catch { return s; }
+            });
           }
-        } catch (_) {}
-        const n = pts.length;
-        let trend = '';
-        if (n >= 6) {
-          const prev = pts.slice(n - 6, n - 3).reduce((s, v) => s + v, 0) / 3;
-          const last = pts.slice(n - 3).reduce((s, v) => s + v, 0) / 3;
-          const delta = last - prev;
-          // With higher = riskier, rising risk is Worsening
-          if (delta > 0.06) trend = 'Worsening';
-          else if (delta < -0.06) trend = 'Improving';
-          else trend = 'Stable';
         }
-        setHistory(items);
-        setPoints(pts);
-        setLabels(lbls);
-        setTrendLabel(trend);
-      } catch (err) {
-        console.error('[DailyCheckin] loadHistory error:', err);
-      }
-    }
-    loadHistory();
-  }, [user, submittedToday]);
+      } catch (_) {}
 
+      const n = pts.length;
+      let trend = '';
+      if (n >= 6) {
+        const prev = pts.slice(n - 6, n - 3).reduce((s, v) => s + v, 0) / 3;
+        const last = pts.slice(n - 3).reduce((s, v) => s + v, 0) / 3;
+        const delta = last - prev;
+        if (delta > 0.06) trend = 'Worsening';
+        else if (delta < -0.06) trend = 'Improving';
+        else trend = 'Stable';
+      }
+
+      setHistory(items);
+      setPoints(pts);
+      setLabels(lbls);
+      setTrendLabel(trend);
+    } catch (err) {
+      console.error('[DailyCheckin] loadHistory error:', err);
+    }
+  }
+
+  // Initialize: check today + load history
+  useEffect(() => {
+    const userId = user?.uid || 'demo';
+    if (!userId) return;
+
+    checkSubmittedToday(userId);
+    loadHistory(userId);
+  }, [user?.uid]);
+
+  // Check AI health
   useEffect(() => {
     let mounted = true;
     (async () => {
@@ -209,12 +165,10 @@ export default function DailyCheckin() {
 
   async function onSubmit(e) {
     e.preventDefault();
-    if (!user) {
-      notify('Please log in first!', 'error');
-      return;
-    }
-    if (!db) {
-      notify('App is not connected to Firestore. Check Firebase config.', 'error');
+    const userId = user?.uid || 'demo';
+
+    if (!userId) {
+      notify('User not authenticated', 'error');
       return;
     }
     if (submittedToday) {
@@ -228,49 +182,51 @@ export default function DailyCheckin() {
 
     setIsSubmitting(true);
     try {
-      const userCheckinsRef = collection(db, 'users', user.uid, 'dailyCheckins');
       const payload = {
-        // Use client timestamp to ensure immediate query-ability for today checks
-        date: Timestamp.now(),
-        // Keep serverTimestamp as an additional field if you want authoritative server time
-        dateServer: serverTimestamp(),
-        answers: {
-          ns_q1: answers.ns_q1,
-          ns_q2: answers.ns_q2,
-          ns_q3: answers.ns_q3,
-          ns_q4: answers.ns_q4,
-          ns_q5: answers.ns_q5,
-          ns_q6: answers.ns_q6,
-          ns_q7: answers.ns_q7,
-          ns_q8: answers.ns_q8,
-          ns_q9: answers.ns_q9,
-          ns_q10: answers.ns_q10,
-          ns_q11: answers.ns_q11,
-          ns_q12: answers.ns_q12,
-        },
-        analyzed: false,
+        answers,
         notes: notes || null,
-        // Analysis flags for backend Python service
         topK: Number(topK),
         explainMethod,
         useScipyWinsorize,
         forceLocal,
       };
-      console.log('[DailyCheckin] Submitting payload:', payload);
-      await addDoc(userCheckinsRef, payload);
+
+      // This calls Flask /functions/analyzeCheckin → saves to SQLite
+      await analyzeCheckinApi({ payload });
+
       notify('Daily check-in saved!', 'success');
       setSubmittedToday(true);
-      // Fire-and-forget analyze request
-      try {
-        analyzeCheckinApi({ userId: user.uid, payload });
-      } catch (_) {}
+
+      // Refresh data
+      await checkSubmittedToday(userId);
+      await loadHistory(userId);
     } catch (err) {
-      console.error('[DailyCheckin] Firestore addDoc error:', err);
-      const msg = err?.message || 'Error saving check-in. Please try again.';
+      console.error('[DailyCheckin] Submit error:', err);
+      const msg = err?.message || 'Failed to save check-in. Please try again.';
       notify(msg, 'error');
     } finally {
       setIsSubmitting(false);
     }
+  }
+
+  // Scoring function (for display only)
+  function scoreFromAnswers(a) {
+    if (!a) return 0.5;
+    const map4 = (v) => ({
+      'None': 1.0,
+      'Normal': 1.0,
+      'Mild': 0.7,
+      'Moderate': 0.4,
+      'Severe': 0.2,
+    })[v?.split(' –')?.[0]] ?? 0.5;
+
+    const parts = [
+      map4(a.ns_q1), map4(a.ns_q2), map4(a.ns_q3), map4(a.ns_q4), map4(a.ns_q5),
+      map4(a.ns_q6), map4(a.ns_q7), map4(a.ns_q8), map4(a.ns_q9), map4(a.ns_q10),
+      map4(a.ns_q11), map4(a.ns_q12)
+    ];
+    const avg = parts.reduce((s, v) => s + v, 0) / parts.length;
+    return Math.max(0, Math.min(1, Number(avg.toFixed(3))));
   }
 
   return (
@@ -281,12 +237,13 @@ export default function DailyCheckin() {
         <span className="inline-flex h-7 w-7 items-center justify-center rounded-md bg-gradient-to-tr from-brand-600 to-blue-500 text-white text-sm shadow ring-1 ring-brand-500/30">✓</span>
         Daily Check-in
       </h1>
-      {/* Top: Why this matters */}
+
+      {/* Why this matters */}
       <div className="grid grid-cols-1 gap-6">
         <Card className="border-0 ring-1 ring-slate-900/5 shadow-md bg-white/85 dark:bg-slate-900/85 rounded-2xl">
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
-              <svg className="w-5 h-5 text-purple-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M12 20l9-5-9-5-9 5 9 5z"/><path d="M12 12l9-5-9-5-9 5 9 5z"/></svg>
+              <svg className="w-5 h-5 text-purple-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M12 20l9-5-9-5-9 5 9 5z"/><path d="M12 12l9-5-9-5-9 5 9 5z"/></svg>
               Why this matters
             </CardTitle>
           </CardHeader>
@@ -298,13 +255,12 @@ export default function DailyCheckin() {
           </CardContent>
         </Card>
 
-        {/* Two-column area */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Left column on desktop: Recent check-ins */}
+          {/* Recent check-ins */}
           <Card className="border-0 ring-1 ring-slate-900/5 shadow-md bg-white/85 dark:bg-slate-900/85 rounded-2xl md:order-1">
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
-                <svg className="w-5 h-5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 3v18h18"/></svg>
+                <svg className="w-5 h-5 text-emerald-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M3 3v18h18"/></svg>
                 Your recent check-ins
               </CardTitle>
             </CardHeader>
@@ -320,280 +276,104 @@ export default function DailyCheckin() {
                   <ul className="divide-y divide-slate-200 dark:divide-slate-800 text-sm rounded-lg overflow-hidden border border-slate-200 dark:border-slate-800">
                     {history.slice(0, 10).map((h, i) => (
                       <li key={h.id || i} className="py-2 px-3 flex items-center justify-between hover:bg-slate-50/70 dark:hover:bg-slate-800/40 transition-colors">
-                        <span className="text-slate-600 dark:text-slate-300">{h?.date?.toDate ? h.date.toDate().toLocaleDateString() : ''}</span>
+                        <span className="text-slate-600 dark:text-slate-300">{new Date(h.date).toLocaleDateString()}</span>
                         <span className="font-medium tabular-nums">{scoreFromAnswers(h.answers)}</span>
                       </li>
                     ))}
                   </ul>
                 </div>
               ) : (
-                <div className="text-sm text-slate-600 dark:text-slate-300">No history yet. Your check-ins will appear here.</div>
+                <div className="text-sm text-slate-600 dark:text-slate-300">No history yet.</div>
               )}
             </CardContent>
           </Card>
 
-          {/* Right column on desktop: Today's Check-in */}
+          {/* Today's Check-in */}
           <Card className="border-0 ring-1 ring-slate-900/5 shadow-md bg-white/85 dark:bg-slate-900/85 rounded-2xl md:order-2">
             <CardHeader>
               <CardTitle className="text-lg md:text-xl flex items-center gap-2">
-                <svg className="w-5 h-5 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 2v4M16 2v4M3 10h18M5 22h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/></svg>
+                <svg className="w-5 h-5 text-blue-500" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M8 2v4M16 2v4M3 10h18M5 22h14a2 2 0 0 0 2-2V8a2 2 0 0 0-2-2H5a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2z"/></svg>
                 Today's Check-in
               </CardTitle>
             </CardHeader>
             <CardContent>
-            {submittedToday ? (
-              <div className="space-y-3 text-sm text-slate-700 dark:text-slate-300">
-                <p className="font-medium">You've already submitted today's check-in. Come back tomorrow.</p>
-                {latestSubmission && latestSubmission.answers && (
-                  <div className="mt-4">
-                    <p className="text-xs text-slate-500 mb-2">Your last responses:</p>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                      <div className="space-y-2">
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Sleep & Energy</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.q1 || '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Pain / Discomfort</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.q2 || '—'}{latestSubmission.answers.q2_specify ? ` (${latestSubmission.answers.q2_specify})` : ''}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Heart / Respiratory</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.q3 || '—'}{latestSubmission.answers.q3 === 'Yes' && latestSubmission.answers.q3_severity ? ` (${latestSubmission.answers.q3_severity})` : ''}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Digestive / Temperature</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.q4 || '—'}{latestSubmission.answers.q4_specify ? ` (${latestSubmission.answers.q4_specify})` : ''}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Mental & Emotional</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.q5 || '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Activity / Hydration / Diet</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.q6_activity || '—'}{latestSubmission.answers.q6_activity ? ', ' : ''}{latestSubmission.answers.q6_hydration || '—'}{latestSubmission.answers.q6_hydration ? ', ' : ''}{latestSubmission.answers.q6_diet || '—'}</div>
-                        </div>
-                      </div>
-                      <div className="space-y-2">
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Bowel Changes</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.ns_q7 || '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Urination Changes</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.ns_q8 || '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Skin / Wounds</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.ns_q9 || '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Dizziness / Fainting</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.ns_q10 || '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Sleep / Insomnia</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.ns_q11 || '—'}</div>
-                        </div>
-                        <div className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
-                          <div className="text-[11px] uppercase tracking-wide text-slate-500">Hot Flashes / Warmth</div>
-                          <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{latestSubmission.answers.ns_q12 || '—'}</div>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                )}
-              </div>
-            ) : (
-              <form onSubmit={onSubmit} className="space-y-10">
-                <div className="inline-flex items-center gap-2 rounded-full border border-blue-200/60 dark:border-blue-900/50 bg-blue-50/60 dark:bg-blue-900/20 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-300">
-                  <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
-                  Daily Symptom Tracking MCQs
-                </div>
-                {/* New MCQ set */}
-                {[
-                  { key: 'ns_q1', title: 'Stomach / Abdominal Pain Today', opts: ['None','Mild – occasional discomfort','Moderate – noticeable, affects tasks','Severe – persistent pain'] },
-                  { key: 'ns_q2', title: 'Headache or Migraine Today', opts: ['None','Mild – didn’t interfere with work','Moderate – interfered with tasks','Severe – unable to perform daily activities'] },
-                  { key: 'ns_q3', title: 'Nausea or Vomiting Today', opts: ['None','Mild – occasional queasiness','Moderate – affected meals','Severe – persistent vomiting'] },
-                  { key: 'ns_q4', title: 'Fatigue or Weakness Today', opts: ['None – felt energetic','Mild – slightly tired','Moderate – noticeable fatigue','Severe – could barely perform activities'] },
-                  { key: 'ns_q5', title: 'Fever or Chills Today', opts: ['None','Mild – slight temperature fluctuation','Moderate – measurable fever (100–102°F / 37.7–38.8°C)','Severe – high fever (>102°F / 38.8°C)'] },
-                  { key: 'ns_q6', title: 'Cough or Shortness of Breath Today', opts: ['None','Mild – occasional cough or shortness of breath','Moderate – daily cough or breathing difficulty','Severe – persistent cough or severe breathing issues'] },
-                  { key: 'ns_q7', title: 'Changes in Bowel Movements Today', opts: ['Normal','Slight irregularity – mild constipation/diarrhea','Moderate – frequent or loose stools','Severe – persistent diarrhea/constipation'] },
-                  { key: 'ns_q8', title: 'Changes in Urination Today', opts: ['Normal','Slight – minor discomfort or frequency change','Moderate – frequent or painful urination','Severe – inability to urinate normally or severe discomfort'] },
-                  { key: 'ns_q9', title: 'Skin Changes / Wounds Today', opts: ['None','Minor – small rashes, bruises, or pimples','Noticeable – persistent rash, sores, or swelling','Severe – bleeding, large lesions, or non-healing wounds'] },
-                  { key: 'ns_q10', title: 'Dizziness or Fainting Today', opts: ['None','Mild – occasional lightheadedness','Moderate – dizziness affecting tasks','Severe – fainting or inability to stand'] },
-                  { key: 'ns_q11', title: 'Sleep / Insomnia Today', opts: ['Slept well – no trouble falling or staying asleep','Mild difficulty – took longer than usual to fall asleep','Moderate difficulty – frequent waking or poor sleep quality','Severe – hardly slept or very restless night'] },
-                  { key: 'ns_q12', title: 'Hot Flashes / Sudden Warmth Today', opts: ['None – no unusual warmth','Mild – occasional warmth or flushing','Moderate – noticeable episodes affecting comfort','Severe – frequent or intense hot flashes'] },
-                ].map((q, idx) => (
-                  <div key={q.key} className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/75 dark:bg-slate-900/60 p-5 md:p-6 transition hover:shadow-md hover:scale-[1.01]">
-                    <div className="flex items-center gap-3 mb-3">
-                      <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-tr from-brand-600 to-blue-500 text-white text-[11px] shadow ring-1 ring-brand-500/30">{idx + 1}</span>
-                      <label className="block text-sm md:text-base font-medium text-slate-800 dark:text-slate-100 leading-snug">{q.title}</label>
-                    </div>
-                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-3">
-                      {q.opts.map(opt => (
-                        <button
-                          type="button"
-                          key={opt}
-                          onClick={() => setField(q.key, opt)}
-                          className={`px-4 py-3 rounded-xl border text-sm text-left transition transform focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${answers[q.key] === opt ? 'bg-gradient-to-tr from-brand-600 to-blue-500 text-white border-transparent shadow-md ring-brand-500/40' : 'bg-white/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:shadow-md hover:-translate-y-[1px]'}`}
-                        >
-                          {opt}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-
-                {/* Daily health notes */}
-                <div className="pt-2">
-                  <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Add notes for today (optional)</label>
-                  <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white/75 dark:bg-slate-900/60 p-3">
-                    <Textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Type anything noteworthy about your health today..." />
-                  </div>
-                </div>
-
-                {/* Hide legacy sections below to avoid duplicate questions */}
-                <div className="hidden">
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white text-[10px]">1</span>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">Sleep & Energy</label>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">How well did you sleep last night, and how energetic do you feel today?</p>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                    {['Very low','Low','Moderate','High','Very high'].map(opt => (
-                      <button type="button" key={opt} onClick={() => setField('q1', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q1 === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white text-[10px]">2</span>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">Pain or Discomfort</label>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">Did you experience any unusual pain, discomfort, or bodily symptoms today?</p>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    {['None','Mild','Moderate','Severe'].map(opt => (
-                      <button type="button" key={opt} onClick={() => setField('q2', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q2 === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
-                    ))}
-                  </div>
-                  {(answers.q2 === 'Mild' || answers.q2 === 'Moderate' || answers.q2 === 'Severe') && (
-                    <input
-                      type="text"
-                      placeholder="Specify location (optional)"
-                      value={answers.q2_specify}
-                      onChange={e => setField('q2_specify', e.target.value)}
-                      className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:bg-slate-900 dark:border-slate-700"
-                    />
-                  )}
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white text-[10px]">3</span>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">Heart & Respiratory Health</label>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">Chest pain, palpitations, shortness of breath, or rapid heartbeat today?</p>
-                  <div className="grid grid-cols-2 gap-2">
-                    {['No','Yes'].map(opt => (
-                      <button type="button" key={opt} onClick={() => setField('q3', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q3 === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
-                    ))}
-                  </div>
-                  {answers.q3 === 'Yes' && (
-                    <div className="mt-2 grid grid-cols-3 md:grid-cols-6 gap-2">
-                      {['Mild','Moderate','Severe'].map(opt => (
-                        <button type="button" key={opt} onClick={() => setField('q3_severity', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q3_severity === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
-                      ))}
-                    </div>
-                  )}
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white text-[10px]">4</span>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">Digestive & Temperature Symptoms</label>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">Digestive issues (nausea, vomiting, diarrhea, constipation, heartburn) or fever/chills today?</p>
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                    {['None','Mild','Moderate','Severe'].map(opt => (
-                      <button type="button" key={opt} onClick={() => setField('q4', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q4 === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
-                    ))}
-                  </div>
-                  {(answers.q4 === 'Mild' || answers.q4 === 'Moderate' || answers.q4 === 'Severe') && (
-                    <input
-                      type="text"
-                      placeholder="Specify (optional)"
-                      value={answers.q4_specify}
-                      onChange={e => setField('q4_specify', e.target.value)}
-                      className="mt-2 w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm dark:bg-slate-900 dark:border-slate-700"
-                    />
-                  )}
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white text-[10px]">5</span>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">Mental & Emotional Well-being</label>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">How would you rate your mood and stress levels today?</p>
-                  <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-                    {['Very low','Low','Neutral','Good','Very good'].map(opt => (
-                      <button type="button" key={opt} onClick={() => setField('q5', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q5 === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
-                    ))}
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center gap-2 mb-1">
-                    <span className="inline-flex h-5 w-5 items-center justify-center rounded-full bg-brand-600 text-white text-[10px]">6</span>
-                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200">Physical Activity & Lifestyle</label>
-                  </div>
-                  <p className="text-xs text-slate-500 mb-2">Did you maintain physical activity, hydration, and balanced meals today?</p>
-                  <div className="flex flex-col gap-4">
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">Activity</p>
-                      <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
-                        {['None','Light','Moderate','Intense'].map(opt => (
-                          <button type="button" key={opt} onClick={() => setField('q6_activity', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q6_activity === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
+              {submittedToday ? (
+                <div className="space-y-3 text-sm text-slate-700 dark:text-slate-300">
+                  <p className="font-medium">You've already submitted today's check-in.</p>
+                  {latestSubmission && (
+                    <div className="mt-4">
+                      <p className="text-xs text-slate-500 mb-2">Your last responses:</p>
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                        {Object.entries(latestSubmission.answers || {}).map(([key, value]) => (
+                          <div key={key} className="rounded-lg border border-slate-200 dark:border-slate-800 p-3 bg-white/70 dark:bg-slate-900/60">
+                            <div className="text-[11px] uppercase tracking-wide text-slate-500">{key.replace('ns_q', 'Q')}</div>
+                            <div className="text-sm font-medium text-slate-800 dark:text-slate-100">{value || '—'}</div>
+                          </div>
                         ))}
                       </div>
                     </div>
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">Hydration</p>
-                      <div className="grid grid-cols-3 gap-2">
-                        {['No','Mostly','Yes'].map(opt => (
-                          <button type="button" key={opt} onClick={() => setField('q6_hydration', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q6_hydration === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
+                  )}
+                </div>
+              ) : (
+                <form onSubmit={onSubmit} className="space-y-10">
+                  <div className="inline-flex items-center gap-2 rounded-full border border-blue-200/60 dark:border-blue-900/50 bg-blue-50/60 dark:bg-blue-900/20 px-3 py-1 text-xs font-medium text-blue-700 dark:text-blue-300">
+                    <span className="inline-block h-2 w-2 rounded-full bg-blue-500" />
+                    Daily Symptom Tracking MCQs
+                  </div>
+
+                  {[
+                    { key: 'ns_q1', title: 'Stomach / Abdominal Pain Today', opts: ['None','Mild – occasional discomfort','Moderate – noticeable, affects tasks','Severe – persistent pain'] },
+                    { key: 'ns_q2', title: 'Headache or Migraine Today', opts: ['None','Mild – didn’t interfere with work','Moderate – interfered with tasks','Severe – unable to perform daily activities'] },
+                    { key: 'ns_q3', title: 'Nausea or Vomiting Today', opts: ['None','Mild – occasional queasiness','Moderate – affected meals','Severe – persistent vomiting'] },
+                    { key: 'ns_q4', title: 'Fatigue or Weakness Today', opts: ['None – felt energetic','Mild – slightly tired','Moderate – noticeable fatigue','Severe – could barely perform activities'] },
+                    { key: 'ns_q5', title: 'Fever or Chills Today', opts: ['None','Mild – slight temperature fluctuation','Moderate – measurable fever (100–102°F / 37.7–38.8°C)','Severe – high fever (>102°F / 38.8°C)'] },
+                    { key: 'ns_q6', title: 'Cough or Shortness of Breath Today', opts: ['None','Mild – occasional cough or shortness of breath','Moderate – daily cough or breathing difficulty','Severe – persistent cough or severe breathing issues'] },
+                    { key: 'ns_q7', title: 'Changes in Bowel Movements Today', opts: ['Normal','Slight irregularity – mild constipation/diarrhea','Moderate – frequent or loose stools','Severe – persistent diarrhea/constipation'] },
+                    { key: 'ns_q8', title: 'Changes in Urination Today', opts: ['Normal','Slight – minor discomfort or frequency change','Moderate – frequent or painful urination','Severe – inability to urinate normally or severe discomfort'] },
+                    { key: 'ns_q9', title: 'Skin Changes / Wounds Today', opts: ['None','Minor – small rashes, bruises, or pimples','Noticeable – persistent rash, sores, or swelling','Severe – bleeding, large lesions, or non-healing wounds'] },
+                    { key: 'ns_q10', title: 'Dizziness or Fainting Today', opts: ['None','Mild – occasional lightheadedness','Moderate – dizziness affecting tasks','Severe – fainting or inability to stand'] },
+                    { key: 'ns_q11', title: 'Sleep / Insomnia Today', opts: ['Slept well – no trouble falling or staying asleep','Mild difficulty – took longer than usual to fall asleep','Moderate difficulty – frequent waking or poor sleep quality','Severe – hardly slept or very restless night'] },
+                    { key: 'ns_q12', title: 'Hot Flashes / Sudden Warmth Today', opts: ['None – no unusual warmth','Mild – occasional warmth or flushing','Moderate – noticeable episodes affecting comfort','Severe – frequent or intense hot flashes'] },
+                  ].map((q, idx) => (
+                    <div key={q.key} className="rounded-2xl border border-slate-200 dark:border-slate-800 bg-white/75 dark:bg-slate-900/60 p-5 md:p-6 transition hover:shadow-md hover:scale-[1.01]">
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="inline-flex h-6 w-6 items-center justify-center rounded-md bg-gradient-to-tr from-brand-600 to-blue-500 text-white text-[11px] shadow ring-1 ring-brand-500/30">{idx + 1}</span>
+                        <label className="block text-sm md:text-base font-medium text-slate-800 dark:text-slate-100 leading-snug">{q.title}</label>
+                      </div>
+                      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-2 gap-3">
+                        {q.opts.map(opt => (
+                          <button
+                            type="button"
+                            key={opt}
+                            onClick={() => setField(q.key, opt)}
+                            className={`px-4 py-3 rounded-xl border text-sm text-left transition transform focus:outline-none focus:ring-2 focus:ring-offset-2 dark:focus:ring-offset-slate-900 ${answers[q.key] === opt ? 'bg-gradient-to-tr from-brand-600 to-blue-500 text-white border-transparent shadow-md ring-brand-500/40' : 'bg-white/80 dark:bg-slate-900/60 border-slate-200 dark:border-slate-700 hover:bg-slate-50 dark:hover:bg-slate-800 hover:shadow-md hover:-translate-y-[1px]'}`}
+                          >
+                            {opt}
+                          </button>
                         ))}
                       </div>
                     </div>
-                    <div>
-                      <p className="text-xs text-slate-500 mb-1">Diet</p>
-                      <div className="grid grid-cols-3 gap-2">
-                        {['No','Mostly','Yes'].map(opt => (
-                          <button type="button" key={opt} onClick={() => setField('q6_diet', opt)} className={`px-3 py-2 rounded-md border text-sm transition ${answers.q6_diet === opt ? 'bg-brand-600 text-white border-brand-600 shadow-sm' : 'border-slate-300 hover:bg-slate-100 dark:border-slate-700 dark:hover:bg-slate-800'}`}>{opt}</button>
-                        ))}
-                      </div>
+                  ))}
+
+                  <div className="pt-2">
+                    <label className="block text-sm font-medium text-slate-700 dark:text-slate-200 mb-1">Add notes for today (optional)</label>
+                    <div className="rounded-xl border border-slate-200 dark:border-slate-800 bg-white/75 dark:bg-slate-900/60 p-3">
+                      <Textarea value={notes} onChange={e => setNotes(e.target.value)} placeholder="Type anything noteworthy about your health today..." />
                     </div>
                   </div>
-                </div>
 
-                {/* End hidden legacy section wrapper */}
-                </div>
-
-                <div className="flex items-center justify-between gap-3 pt-2">
-                  <div className="text-xs text-slate-500">Complete all sections to enable saving.</div>
-                  <Button type="submit" disabled={isSubmitting || !isValid || authLoading} className="shadow-md">
-                    {isSubmitting ? (
-                      <span className="inline-flex items-center gap-2"><Spinner size={16} /> Saving...</span>
-                    ) : (
-                      'Save today\'s check-in'
-                    )}
-                  </Button>
-                </div>
-              </form>
-            )}
+                  <div className="flex items-center justify-between gap-3 pt-2">
+                    <div className="text-xs text-slate-500">Complete all sections to enable saving.</div>
+                    <Button type="submit" disabled={isSubmitting || !isValid || authLoading} className="shadow-md">
+                      {isSubmitting ? (
+                        <span className="inline-flex items-center gap-2"><Spinner size={16} /> Saving...</span>
+                      ) : (
+                        "Save today's check-in"
+                      )}
+                    </Button>
+                  </div>
+                </form>
+              )}
             </CardContent>
           </Card>
         </div>
@@ -601,5 +381,3 @@ export default function DailyCheckin() {
     </div>
   );
 }
-
-
