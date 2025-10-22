@@ -4,12 +4,10 @@ import Seo from '../components/Seo';
 import Input from '../components/ui/Input';
 import Button from '../components/ui/Button';
 import { Card, CardContent } from '../components/ui/Card';
-import { useAuth } from '../context/AuthContext';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useToast } from '../components/ui/ToastProvider';
 
 export default function LoginPage() {
-  const { user, login } = useAuth();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -21,12 +19,22 @@ export default function LoginPage() {
   const location = useLocation();
   const from = location.state?.from?.pathname || '/dashboard';
 
-  // Redirect if already logged in
+  // Check if user is already logged in by calling /api/auth/me
   useEffect(() => {
-    if (user) {
-      navigate(from, { replace: true });
-    }
-  }, [user, from, navigate]);
+    const checkAuth = async () => {
+      try {
+        const res = await fetch('http://localhost:8080/api/auth/me', {
+          credentials: 'include', // Important for sessions
+        });
+        if (res.ok) {
+          navigate(from, { replace: true });
+        }
+      } catch (err) {
+        // Not logged in — stay on login page
+      }
+    };
+    checkAuth();
+  }, [from, navigate]);
 
   async function handleEmailLogin(e) {
     e.preventDefault();
@@ -34,24 +42,31 @@ export default function LoginPage() {
     setSubmitting(true);
 
     try {
-      // Demo: accept any non-empty email/password
-      if (!email.trim() || !password.trim()) {
-        throw new Error('Please enter both email and password.');
-      }
+      const res = await fetch('http://localhost:8080/api/auth/login', {
+        method: 'POST',
+        credentials: 'include', // Sends session cookie
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: email.trim().toLowerCase(), password }),
+      });
 
-      await login({ email, password });
-      notify('Signed in successfully!', 'success');
-      navigate(from, { replace: true });
+      const data = await res.json();
+
+      if (res.ok && data.ok) {
+        notify('Signed in successfully!', 'success');
+        navigate(from, { replace: true });
+      } else {
+        const message = data.error || 'Failed to sign in. Please try again.';
+        setError(message);
+        notify(message, 'error');
+      }
     } catch (err) {
-      const message = err.message || 'Failed to sign in. Please try again.';
+      const message = 'Network error. Please check your connection.';
       setError(message);
       notify(message, 'error');
     } finally {
       setSubmitting(false);
     }
   }
-
-  if (user) return null;
 
   return (
     <div className="min-h-[calc(100vh-4rem)] bg-gradient-to-b from-brand-50 to-white dark:from-slate-900 dark:to-slate-950 grid place-items-center px-4">

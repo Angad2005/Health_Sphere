@@ -8,10 +8,55 @@ export default function Home() {
   const { user } = useAuth();
   const [isVisible, setIsVisible] = useState(false);
 
-  useEffect(() => {
-    setIsVisible(true);
-  }, []);
+  // --- NEW: State for fetched data ---
+  const [activity, setActivity] = useState([]);
+  const [insights, setInsights] = useState(null);
+  const [isLoading, setIsLoading] = useState(true);
 
+  // --- NEW: Fetch data on component mount ---
+  useEffect(() => {
+    setIsVisible(true); // From your original code
+
+    const fetchActivity = async () => {
+      try {
+        // NOTE: Ensure your Flask backend is running on http://localhost:8080
+        const response = await fetch('http://localhost:8080/api/dashboard/recent-activity');
+        if (!response.ok) throw new Error('Failed to fetch activity');
+        const data = await response.json();
+        setActivity(data);
+      } catch (error) {
+        console.error("Error fetching activity:", error);
+        // Set sample data on error so the UI doesn't break
+        setActivity([
+          { id: 'err-1', type: 'default', title: 'Could not load activity', timestamp: 'Just now' }
+        ]);
+      }
+    };
+
+    const fetchInsights = async () => {
+      try {
+        const response = await fetch('http://localhost:8080/api/dashboard/health-insights');
+        if (!response.ok) throw new Error('Failed to fetch insights');
+        const data = await response.json();
+        setInsights(data);
+      } catch (error) {
+        console.error("Error fetching insights:", error);
+        // Set sample data on error
+        setInsights({
+          wellnessScore: { score: 'N/A', total: 100, label: 'Could not load score' },
+          trendAnalysis: { label: 'Trend Analysis', description: 'Could not load trends' },
+          recommendation: { label: 'Recommendation', description: 'Could not load recommendations' }
+        });
+      }
+    };
+
+    // Fetch both in parallel
+    Promise.all([fetchActivity(), fetchInsights()])
+      .finally(() => setIsLoading(false));
+      
+  }, []); // Empty dependency array ensures this runs only once
+
+  // --- (Static data from your original file) ---
   const features = [
     {
       icon: (
@@ -131,6 +176,30 @@ export default function Home() {
       highlight: "Clinician input"
     }
   ];
+  
+  // --- NEW: Helper object to map activity types to icons/colors ---
+  const activityIcons = {
+    checkin: {
+      bgClass: 'bg-emerald-50 dark:bg-emerald-900/20',
+      iconBgClass: 'bg-emerald-100 dark:bg-emerald-900/30',
+      icon: <svg className="w-4 h-4 text-emerald-600 dark:text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 12l2 2 4-4"/></svg>
+    },
+    report: {
+      bgClass: 'bg-blue-50 dark:bg-blue-900/20',
+      iconBgClass: 'bg-blue-100 dark:bg-blue-900/30',
+      icon: <svg className="w-4 h-4 text-blue-600 dark:text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
+    },
+    chat: {
+      bgClass: 'bg-purple-50 dark:bg-purple-900/20',
+      iconBgClass: 'bg-purple-100 dark:bg-purple-900/30',
+      icon: <svg className="w-4 h-4 text-purple-600 dark:text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+    },
+    default: { // Fallback for errors or new types
+      bgClass: 'bg-slate-50 dark:bg-slate-900/20',
+      iconBgClass: 'bg-slate-100 dark:bg-slate-900/30',
+      icon: <svg className="w-4 h-4 text-slate-600 dark:text-slate-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /></svg>
+    }
+  };
 
   return (
     <div className="relative overflow-hidden">
@@ -142,7 +211,6 @@ export default function Home() {
       />
       {/* Hero Section */}
       <section className="relative py-12 lg:py-20">
-        {/* Background Elements */}
         <div className="absolute inset-0 -z-10">
           <div className="absolute top-0 left-1/4 w-72 h-72 bg-gradient-to-r from-brand-400/20 to-blue-400/20 rounded-full blur-3xl animate-pulse"></div>
           <div className="absolute bottom-0 right-1/4 w-96 h-96 bg-gradient-to-r from-purple-400/20 to-pink-400/20 rounded-full blur-3xl animate-pulse delay-1000"></div>
@@ -241,10 +309,11 @@ export default function Home() {
         </div>
       </section>
 
-      {/* Recent Activity & Health Insights */}
+      {/* --- MODIFIED: Recent Activity & Health Insights --- */}
       <section className="py-12 bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-slate-800">
         <div className="container mx-auto px-4">
           <div className="grid lg:grid-cols-2 gap-8">
+            
             {/* Recent Activity */}
             <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
               <div className="flex items-center justify-between mb-4">
@@ -254,33 +323,28 @@ export default function Home() {
                 </NavLink>
               </div>
               <div className="space-y-3">
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-emerald-50 dark:bg-emerald-900/20">
-                  <div className="w-8 h-8 rounded-full bg-emerald-100 dark:bg-emerald-900/30 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-emerald-600 dark:text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M9 12l2 2 4-4"/></svg>
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100">Daily check-in completed</div>
-                    <div className="text-xs text-slate-600 dark:text-slate-400">2 hours ago</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-blue-50 dark:bg-blue-900/20">
-                  <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-blue-600 dark:text-blue-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/></svg>
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100">Lab report analyzed</div>
-                    <div className="text-xs text-slate-600 dark:text-slate-400">Yesterday</div>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 p-3 rounded-lg bg-purple-50 dark:bg-purple-900/20">
-                  <div className="w-8 h-8 rounded-full bg-purple-100 dark:bg-purple-900/30 flex items-center justify-center">
-                    <svg className="w-4 h-4 text-purple-600 dark:text-purple-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
-                  </div>
-                  <div className="flex-1">
-                    <div className="text-sm font-medium text-slate-900 dark:text-slate-100">AI chat session</div>
-                    <div className="text-xs text-slate-600 dark:text-slate-400">3 days ago</div>
-                  </div>
-                </div>
+                
+                {/* --- NEW: Dynamic Content --- */}
+                {isLoading ? (
+                  <p className="text-sm text-slate-600 dark:text-slate-400">Loading activity...</p>
+                ) : (
+                  activity.map((item) => {
+                    const style = activityIcons[item.type] || activityIcons.default;
+                    return (
+                      <div key={item.id} className={`flex items-center gap-3 p-3 rounded-lg ${style.bgClass}`}>
+                        <div className={`w-8 h-8 rounded-full ${style.iconBgClass} flex items-center justify-center flex-shrink-0`}>
+                          {style.icon}
+                        </div>
+                        <div className="flex-1">
+                          <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.title}</div>
+                          <div className="text-xs text-slate-600 dark:text-slate-400">{item.timestamp}</div>
+                        </div>
+                      </div>
+                    );
+                  })
+                )}
+                {/* --- End of Dynamic Content --- */}
+                
               </div>
             </div>
 
@@ -293,28 +357,53 @@ export default function Home() {
                 </NavLink>
               </div>
               <div className="space-y-4">
-                <div className="p-4 rounded-lg bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                    <span className="text-sm font-medium text-slate-900 dark:text-slate-100">Wellness Score</span>
-                  </div>
-                  <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">85/100</div>
-                  <div className="text-xs text-slate-600 dark:text-slate-400">Good overall health</div>
-                </div>
-                <div className="p-4 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                    <span className="text-sm font-medium text-slate-900 dark:text-slate-100">Trend Analysis</span>
-                  </div>
-                  <div className="text-sm text-slate-600 dark:text-slate-400">Energy levels improving over the past week</div>
-                </div>
-                <div className="p-4 rounded-lg bg-gradient-to-r from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="w-2 h-2 rounded-full bg-orange-500"></div>
-                    <span className="text-sm font-medium text-slate-900 dark:text-slate-100">Recommendation</span>
-                  </div>
-                  <div className="text-sm text-slate-600 dark:text-slate-400">Consider increasing water intake based on recent patterns</div>
-                </div>
+
+                {/* --- NEW: Dynamic Content --- */}
+                {isLoading || !insights ? (
+                  <p className="text-sm text-slate-600 dark:text-slate-400">Loading insights...</p>
+                ) : (
+                  <>
+                    {/* Wellness Score */}
+                    <div className="p-4 rounded-lg bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                        <span className="text-sm font-medium text-slate-900 dark:text-slate-100">Wellness Score</span>
+                      </div>
+                      <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                        {insights.wellnessScore.score}/{insights.wellnessScore.total}
+                      </div>
+                      <div className="text-xs text-slate-600 dark:text-slate-400">
+                        {insights.wellnessScore.label}
+                      </div>
+                    </div>
+                    {/* Trend Analysis */}
+                    <div className="p-4 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                        <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                          {insights.trendAnalysis.label}
+                        </span>
+                      </div>
+                      <div className="text-sm text-slate-600 dark:text-slate-400">
+                        {insights.trendAnalysis.description}
+                      </div>
+                    </div>
+                    {/* Recommendation */}
+                    <div className="p-4 rounded-lg bg-gradient-to-r from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20">
+                      <div className="flex items-center gap-2 mb-2">
+                        <div className="w-2 h-2 rounded-full bg-orange-500"></div>
+                        <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                          {insights.recommendation.label}
+                        </span>
+                      </div>
+                      <div className="text-sm text-slate-600 dark:text-slate-400">
+                        {insights.recommendation.description}
+                      </div>
+                    </div>
+                  </>
+                )}
+                {/* --- End of Dynamic Content --- */}
+
               </div>
             </div>
           </div>
@@ -471,7 +560,7 @@ export default function Home() {
                 </p>
               </div>
             ))}
-      </div>
+          </div>
 
           {/* Additional trust indicators */}
           <div className="mt-16 text-center">
@@ -504,10 +593,6 @@ export default function Home() {
           </div>
         </div>
       </section>
-
-      {/* Removed duplicate bottom CTA section to avoid double buttons */}
     </div>
   );
 }
-
-
