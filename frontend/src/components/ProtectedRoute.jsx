@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import Spinner from './ui/Spinner';
 
 export default function ProtectedRoute({ children }) {
-  const { user, loading } = useAuth();
+  const { currentUser, loading } = useAuth(); // ✅ was "user", now "currentUser"
   const location = useLocation();
 
   // While auth is initializing, show loading
@@ -18,7 +18,7 @@ export default function ProtectedRoute({ children }) {
   }
 
   // If not authenticated, redirect to login and remember where user came from
-  if (!user) {
+  if (!currentUser) {
     return <Navigate to="/login" state={{ from: location }} replace />;
   }
 

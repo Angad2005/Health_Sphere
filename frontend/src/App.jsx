@@ -1,7 +1,6 @@
 // src/App.jsx
 import React from 'react';
 import { Routes, Route } from 'react-router-dom';
-import { AuthProvider } from './context/AuthContext'; // ✅ Add AuthProvider
 import Navbar from './components/Navbar';
 import Dashboard from './pages/Dashboard';
 import Home from './pages/Home';
@@ -17,25 +16,22 @@ import Profile from './pages/Profile';
 
 export default function App() {
   return (
-    // ✅ Wrap entire app in AuthProvider
-    <AuthProvider>
-      <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900">
-        <Navbar />
-        <main className="mx-auto max-w-7xl px-4 py-6">
-          <Routes>
-            <Route path="/" element={<Home />} />
-            <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
-            <Route path="/daily-checkin" element={<ProtectedRoute><DailyCheckin /></ProtectedRoute>} />
-            <Route path="/upload-report" element={<ProtectedRoute><UploadReport /></ProtectedRoute>} />
-            <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
-            <Route path="/login" element={<LoginPage />} />
-            <Route path="/signup" element={<SignupPage />} />
-            <Route path="*" element={<NotFound />} />
-          </Routes>
-        </main>
-        <Footer />
-        <ChatbotWidget />
-      </div>
-    </AuthProvider>
+    <div className="min-h-screen bg-gradient-to-b from-slate-50 to-white dark:from-slate-950 dark:to-slate-900">
+      <Navbar />
+      <main className="mx-auto max-w-7xl px-4 py-6">
+        <Routes>
+          <Route path="/" element={<Home />} />
+          <Route path="/dashboard" element={<ProtectedRoute><Dashboard /></ProtectedRoute>} />
+          <Route path="/daily-checkin" element={<ProtectedRoute><DailyCheckin /></ProtectedRoute>} />
+          <Route path="/upload-report" element={<ProtectedRoute><UploadReport /></ProtectedRoute>} />
+          <Route path="/profile" element={<ProtectedRoute><Profile /></ProtectedRoute>} />
+          <Route path="/login" element={<LoginPage />} />
+          <Route path="/signup" element={<SignupPage />} />
+          <Route path="*" element={<NotFound />} />
+        </Routes>
+      </main>
+      <Footer />
+      <ChatbotWidget />
+    </div>
   );
 }

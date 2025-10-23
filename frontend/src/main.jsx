@@ -1,3 +1,4 @@
+// src/main.jsx
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { BrowserRouter } from 'react-router-dom';
@@ -8,15 +9,15 @@ import { ToastProvider } from './components/ui/ToastProvider';
 import './styles/tailwind.css';
 
 createRoot(document.getElementById('root')).render(
-  <ThemeProvider>
-    <ToastProvider>
-      <AuthProvider>
+  <React.StrictMode>
+    <ThemeProvider>
+      <ToastProvider>
         <BrowserRouter>
-          <App />
+          <AuthProvider>
+            <App />
+          </AuthProvider>
         </BrowserRouter>
-      </AuthProvider>
-    </ToastProvider>
-  </ThemeProvider>
+      </ToastProvider>
+    </ThemeProvider>
+  </React.StrictMode>,
 );
-
-
