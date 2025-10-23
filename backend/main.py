@@ -2,7 +2,8 @@ import os
 import json
 import sqlite3
 import uuid
-from datetime import datetime, timedelta
+from datetime import datetime
+from functools import wraps
 from flask import Flask, request, jsonify, session
 from flask_cors import CORS
 import bcrypt
@@ -10,14 +11,27 @@ import re
 
 # Initialize Flask app
 app = Flask(__name__)
-app.secret_key = os.getenv('SECRET_KEY', 'change-this-in-production-very-secret-key-123!')
-CORS(app, supports_credentials=True)  # Enable CORS with credentials for sessions
 
-# Database paths
+# --- Security & Session Configuration ---
+app.secret_key = os.getenv('SECRET_KEY', 'change-this-in-production-very-secret-key-123!')
+
+# Critical: Configure session cookies for modern browsers
+app.config.update(
+    SESSION_COOKIE_NAME='health_session',
+    SESSION_COOKIE_SAMESITE='Lax',      # Use 'None' if frontend/backend on different domains (requires HTTPS)
+    SESSION_COOKIE_SECURE=False,        # Set to True in production with HTTPS
+    SESSION_COOKIE_HTTPONLY=True,       # Prevent XSS attacks
+    PERMANENT_SESSION_LIFETIME=604800,  # 7 days in seconds
+)
+
+# Enable CORS with credentials for session-based auth
+CORS(app, supports_credentials=True)
+
+# --- Database Configuration ---
 AUTH_DB_PATH = os.getenv('AUTH_DATABASE_PATH', 'data/auth.db')
 APP_DB_PATH = os.getenv('APP_DATABASE_PATH', 'data/app.db')
 
-# Ensure data dir exists
+# Ensure data directory exists
 os.makedirs(os.path.dirname(AUTH_DB_PATH), exist_ok=True)
 os.makedirs(os.path.dirname(APP_DB_PATH), exist_ok=True)
 
@@ -100,17 +114,20 @@ def validate_email(email: str) -> bool:
 
 def require_auth(f):
     """Decorator to protect routes"""
+    @wraps(f)
     def wrapper(*args, **kwargs):
         if 'user_id' not in session:
             return jsonify({"error": "Unauthorized"}), 401
         return f(*args, **kwargs)
-    wrapper.__name__ = f.__name__
     return wrapper
 
 # --- Auth Routes ---
 @app.route('/api/auth/signup', methods=['POST'])
 def signup():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+        
     email = data.get('email', '').strip().lower()
     password = data.get('password', '')
 
@@ -134,11 +151,15 @@ def signup():
     except sqlite3.IntegrityError:
         return jsonify({"error": "Email already registered"}), 409
     except Exception as e:
+        app.logger.error(f"Signup error: {str(e)}")
         return jsonify({"error": "Signup failed"}), 500
 
 @app.route('/api/auth/login', methods=['POST'])
 def login():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+        
     email = data.get('email', '').strip().lower()
     password = data.get('password', '')
 
@@ -150,6 +171,7 @@ def login():
         user = cur.fetchone()
 
     if user and verify_password(password, user['password_hash']):
+        session.permanent = True  # Use configured lifetime
         session['user_id'] = user['id']
         return jsonify({"ok": True, "user": {"id": user['id'], "email": user['email']}})
     else:
@@ -165,9 +187,11 @@ def me():
     user_id = session.get('user_id')
     if not user_id:
         return jsonify({"error": "Unauthorized"}), 401
+        
     with get_auth_db() as conn:
         cur = conn.execute('SELECT id, email FROM users WHERE id = ?', (user_id,))
         user = cur.fetchone()
+        
     if user:
         return jsonify({"user": {"id": user['id'], "email": user['email']}})
     else:
@@ -180,7 +204,11 @@ def get_user_id():
 
 def format_relative_time(iso_str):
     try:
-        dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        # Handle both formats: with and without timezone
+        if iso_str.endswith('Z'):
+            dt = datetime.fromisoformat(iso_str.replace("Z", "+00:00"))
+        else:
+            dt = datetime.fromisoformat(iso_str)
         diff = datetime.utcnow() - dt
         seconds = diff.total_seconds()
         if seconds < 60:
@@ -193,7 +221,7 @@ def format_relative_time(iso_str):
             return "Yesterday"
         else:
             return f"{int(seconds // 86400)} days ago"
-    except:
+    except Exception:
         return "Just now"
 
 @app.route('/api/dashboard/recent-activity')
@@ -265,11 +293,15 @@ def get_health_insights():
         total_score = 0
         count = 0
         for row in rows:
-            answers = json.loads(row['answers'])
-            for val in answers.values():
-                if isinstance(val, (int, float)) and 0 <= val <= 5:
-                    total_score += val
-                    count += 1
+            try:
+                answers = json.loads(row['answers'])
+                for val in answers.values():
+                    if isinstance(val, (int, float)) and 0 <= val <= 5:
+                        total_score += val
+                        count += 1
+            except (json.JSONDecodeError, TypeError):
+                continue
+                
         avg = total_score / count if count else 3
         wellness_score = min(100, max(0, int((avg / 5) * 100)))
         label = "Good overall health" if wellness_score >= 80 else "Needs attention"
@@ -300,7 +332,7 @@ def get_health_insights():
         }
     })
 
-# --- Existing AI/Health Endpoints (now protected) ---
+# --- Protected AI/Health Endpoints ---
 @app.route('/api/ai/health')
 def ai_health():
     return jsonify({
@@ -321,6 +353,9 @@ def analyze():
 @require_auth
 def pdf_extract():
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+        
     url = data.get('url', '')
     use_ocr = data.get('useOcr', False)
     lang = data.get('lang', 'en')
@@ -356,7 +391,11 @@ def process_report():
 @require_auth
 def analyze_checkin():
     user_id = get_user_id()
-    payload = request.get_json().get('payload', {})
+    payload = request.get_json()
+    if not payload:
+        return jsonify({"error": "Invalid JSON"}), 400
+        
+    payload = payload.get('payload', {})
     checkin_id = str(uuid.uuid4())
     with get_app_db() as conn:
         conn.execute(
@@ -386,6 +425,9 @@ def analyze_checkin():
 def chat_with_gemini():
     user_id = get_user_id()
     data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+        
     message = data.get('message', '')[:50]
     chat_id = str(uuid.uuid4())
     with get_app_db() as conn:
@@ -398,9 +440,6 @@ def chat_with_gemini():
         "sources": ["CDC Guidelines", "Mayo Clinic"]
     })
 
-# Other existing endpoints (riskSeries, feedback, etc.) should also be protected with @require_auth
-# For brevity, they are omitted here but follow the same pattern.
-
 @app.route('/api/checkins')
 @require_auth
 def get_checkins():
@@ -412,20 +451,23 @@ def get_checkins():
             (user_id, limit)
         )
         rows = cur.fetchall()
-    checkins = [
-        {
-            "id": row["id"],
-            "user_id": row["user_id"],
-            "date": row["date"],
-            "answers": json.loads(row["answers"]),
-            "notes": row["notes"],
-            "topK": row["topK"],
-            "explainMethod": row["explainMethod"],
-            "useScipyWinsorize": bool(row["useScipyWinsorize"]),
-            "forceLocal": bool(row["forceLocal"])
-        }
-        for row in rows
-    ]
+    checkins = []
+    for row in rows:
+        try:
+            checkins.append({
+                "id": row["id"],
+                "user_id": row["user_id"],
+                "date": row["date"],
+                "answers": json.loads(row["answers"]),
+                "notes": row["notes"],
+                "topK": row["topK"],
+                "explainMethod": row["explainMethod"],
+                "useScipyWinsorize": bool(row["useScipyWinsorize"]),
+                "forceLocal": bool(row["forceLocal"])
+            })
+        except (json.JSONDecodeError, TypeError):
+            continue
+            
     return jsonify(checkins)
 
 @app.route('/')

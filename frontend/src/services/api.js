@@ -1,40 +1,21 @@
 // src/services/api.js
-// Vite-compatible API client for Flask backend
+// Vite-compatible API client for Flask backend (SESSION-BASED AUTH)
 
 const isDev = import.meta.env.DEV;
 const BASE = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
 
-// Default user ID for demo/dev mode
-const DEFAULT_USER_ID = 'demo';
-
 /**
- * Get user ID (from localStorage, context, or fallback)
- * In production, this should come from real auth (e.g., JWT, session)
- */
-function getUserId() {
-  // Example: read from localStorage if you store it
-  // return localStorage.getItem('userId') || DEFAULT_USER_ID;
-  return DEFAULT_USER_ID; // For now, hardcode to 'demo' to match Flask
-}
-
-/**
- * Build headers with x-user-id
- */
-function getHeaders(extraHeaders = {}) {
-  return {
-    'Content-Type': 'application/json',
-    'x-user-id': getUserId(),
-    ...extraHeaders,
-  };
-}
-
-/**
- * Wrapper for JSON fetch with error handling
+ * Wrapper for JSON fetch with session credentials and error handling
  */
 async function jsonFetch(url, options = {}) {
+  // ALWAYS include credentials for session-based auth
   const res = await fetch(url, {
     ...options,
-    headers: getHeaders(options.headers),
+    credentials: 'include', // ← CRITICAL: sends session cookie
+    headers: {
+      'Content-Type': 'application/json',
+      ...options.headers,
+    },
   });
 
   let data;
@@ -66,7 +47,9 @@ export async function analyze(body) {
 }
 
 export async function aiHealth() {
-  const res = await fetch(`${BASE}/api/ai/health`);
+  const res = await fetch(`${BASE}/api/ai/health`, {
+    credentials: 'include', // ← Include for consistency
+  });
   return res.json();
 }
 
@@ -81,13 +64,18 @@ export async function processReport(file) {
   const formData = new FormData();
   formData.append('file', file);
 
+  // For multipart/form-data, DON'T set Content-Type (browser sets it with boundary)
   const res = await fetch(`${BASE}/functions/processReport`, {
     method: 'POST',
-    headers: { 'x-user-id': getUserId() }, // multipart/form-data doesn't need Content-Type
+    credentials: 'include', // ← CRITICAL
+    // No Content-Type header for FormData
   });
+
   const text = await res.text();
   let json = {};
-  try { json = text ? JSON.parse(text) : {}; } catch (_) {}
+  try { 
+    json = text ? JSON.parse(text) : {}; 
+  } catch (_) {}
 
   if (!res.ok) {
     const msg = json?.error || json?.message || `HTTP ${res.status}`;
@@ -99,7 +87,7 @@ export async function processReport(file) {
   return json;
 }
 
-// Progress-capable upload (unchanged logic, but simplified headers)
+// Progress-capable upload with session credentials
 export function processReportWithProgress(file, { onProgress, signal } = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -107,7 +95,7 @@ export function processReportWithProgress(file, { onProgress, signal } = {}) {
     form.append('file', file);
 
     xhr.open('POST', `${BASE}/functions/processReport`, true);
-    xhr.setRequestHeader('x-user-id', getUserId());
+    xhr.withCredentials = true; // ← Equivalent to credentials: 'include' for XHR
 
     if (xhr.upload && typeof onProgress === 'function') {
       xhr.upload.onprogress = (evt) => {
@@ -189,16 +177,14 @@ export async function chatWithGeminiApi(payload, { signal } = {}) {
   });
 }
 
-export async function fetchRiskSeries(userId = getUserId()) {
-  const url = new URL(`${BASE}/functions/riskSeries`);
-  url.searchParams.set('userId', String(userId));
-  return jsonFetch(url.toString());
+export async function fetchRiskSeries() {
+  // No userId needed - Flask gets it from session
+  return jsonFetch(`${BASE}/functions/riskSeries`);
 }
 
-// New: fetch user check-ins from Flask
-export async function fetchCheckins(userId = getUserId(), limit = 30) {
+// Fetch user check-ins (no userId needed - Flask uses session)
+export async function fetchCheckins(limit = 30) {
   const url = new URL(`${BASE}/api/checkins`);
-  url.searchParams.set('userId', String(userId));
   url.searchParams.set('limit', String(limit));
   return jsonFetch(url.toString());
 }
@@ -208,4 +194,29 @@ export async function generateReportSummary(extractedData, ocrText) {
     method: 'POST',
     body: JSON.stringify({ extractedData, ocrText }),
   });
+}
+
+// --- Auth-specific functions ---
+export async function login(email, password) {
+  return jsonFetch(`${BASE}/api/auth/login`, {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function signup(email, password) {
+  return jsonFetch(`${BASE}/api/auth/signup`, {
+    method: 'POST',
+    body: JSON.stringify({ email, password }),
+  });
+}
+
+export async function logout() {
+  return jsonFetch(`${BASE}/api/auth/logout`, {
+    method: 'POST',
+  });
+}
+
+export async function getCurrentUser() {
+  return jsonFetch(`${BASE}/api/auth/me`);
 }

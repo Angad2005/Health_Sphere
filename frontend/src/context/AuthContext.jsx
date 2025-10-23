@@ -1,30 +1,30 @@
 // src/context/AuthContext.jsx
 import React, { createContext, useContext, useEffect, useState, useCallback } from 'react';
+import {
+  login as apiLogin,
+  signup as apiSignup,
+  logout as apiLogout,
+  getCurrentUser
+} from '@/services/api';
 
 const AuthContext = createContext();
 
 export function useAuth() {
-  return useContext(AuthContext);
+  const context = useContext(AuthContext);
+  if (!context) {
+    throw new Error('useAuth must be used within an AuthProvider');
+  }
+  return context;
 }
 
 export function AuthProvider({ children }) {
   const [currentUser, setCurrentUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
-  // ✅ Remove navigate here — we'll handle redirects in components
-  // const navigate = useNavigate(); ← REMOVE THIS LINE
-
   const fetchCurrentUser = useCallback(async () => {
     try {
-      const res = await fetch('http://localhost:8080/api/auth/me', {
-        credentials: 'include',
-      });
-      if (res.ok) {
-        const data = await res.json();
-        setCurrentUser(data.user);
-      } else {
-        setCurrentUser(null);
-      }
+      const user = await getCurrentUser();
+      setCurrentUser(user);
     } catch (err) {
       console.error("Auth check failed:", err);
       setCurrentUser(null);
@@ -34,42 +34,35 @@ export function AuthProvider({ children }) {
   }, []);
 
   const login = async (credentials) => {
-    const res = await fetch('http://localhost:8080/api/auth/login', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(credentials),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Login failed');
-    setCurrentUser(data.user);
-    return data.user;
+    try {
+      const user = await apiLogin(credentials.email, credentials.password);
+      setCurrentUser(user);
+      return user;
+    } catch (error) {
+      setCurrentUser(null);
+      throw error; // Re-throw for component-level error handling
+    }
   };
 
   const signup = async (credentials) => {
-    const res = await fetch('http://localhost:8080/api/auth/signup', {
-      method: 'POST',
-      credentials: 'include',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(credentials),
-    });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Signup failed');
-    setCurrentUser(data.user);
-    return data.user;
+    try {
+      const user = await apiSignup(credentials.email, credentials.password);
+      setCurrentUser(user);
+      return user;
+    } catch (error) {
+      setCurrentUser(null);
+      throw error; // Re-throw for component-level error handling
+    }
   };
 
   const logout = async () => {
     try {
-      await fetch('http://localhost:8080/api/auth/logout', {
-        method: 'POST',
-        credentials: 'include',
-      });
+      await apiLogout();
     } catch (err) {
       console.error("Logout failed:", err);
+      // Continue with logout even if API fails
     } finally {
       setCurrentUser(null);
-      // ✅ We'll handle redirect in LoginPage/SignupPage — NOT here
     }
   };
 
@@ -83,11 +76,12 @@ export function AuthProvider({ children }) {
     signup,
     logout,
     loading,
+    isAuthenticated: !!currentUser
   };
 
   return (
     <AuthContext.Provider value={value}>
-      {!loading && children}
+      {children}
     </AuthContext.Provider>
   );
 }
