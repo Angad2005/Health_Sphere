@@ -5,7 +5,7 @@ import { useAuth } from '../context/AuthContext';
 import Button from '../components/ui/Button';
 
 export default function Home() {
-  const { user } = useAuth();
+  const { currentUser } = useAuth();
   const [isVisible, setIsVisible] = useState(false);
 
   // --- NEW: State for fetched data ---
@@ -13,14 +13,22 @@ export default function Home() {
   const [insights, setInsights] = useState(null);
   const [isLoading, setIsLoading] = useState(true);
 
-  // --- NEW: Fetch data on component mount ---
+  // --- NEW: Fetch data on component mount (only if authenticated) ---
   useEffect(() => {
     setIsVisible(true); // From your original code
+
+    // Only fetch data if user is authenticated
+    if (!currentUser) {
+      setIsLoading(false);
+      return;
+    }
 
     const fetchActivity = async () => {
       try {
         // NOTE: Ensure your Flask backend is running on http://localhost:8080
-        const response = await fetch('http://localhost:8080/api/dashboard/recent-activity');
+        const response = await fetch('http://localhost:8080/api/dashboard/recent-activity', {
+          credentials: 'include'
+        });
         if (!response.ok) throw new Error('Failed to fetch activity');
         const data = await response.json();
         setActivity(data);
@@ -35,7 +43,9 @@ export default function Home() {
 
     const fetchInsights = async () => {
       try {
-        const response = await fetch('http://localhost:8080/api/dashboard/health-insights');
+        const response = await fetch('http://localhost:8080/api/dashboard/health-insights', {
+          credentials: 'include'
+        });
         if (!response.ok) throw new Error('Failed to fetch insights');
         const data = await response.json();
         setInsights(data);
@@ -54,7 +64,7 @@ export default function Home() {
     Promise.all([fetchActivity(), fetchInsights()])
       .finally(() => setIsLoading(false));
       
-  }, []); // Empty dependency array ensures this runs only once
+  }, [currentUser]); // Depend on currentUser to refetch when auth status changes
 
   // --- (Static data from your original file) ---
   const features = [
@@ -228,7 +238,7 @@ export default function Home() {
               Transform your healthcare experience with intelligent insights, proactive monitoring, and personalized guidance powered by cutting-edge AI technology.
             </p>
             <div className="flex flex-col sm:flex-row gap-4 justify-center items-center">
-              {user ? (
+              {currentUser ? (
                 <NavLink to="/dashboard">
                   <Button size="lg" className="px-8 py-4 text-lg">
                     Go to Dashboard
@@ -309,106 +319,108 @@ export default function Home() {
         </div>
       </section>
 
-      {/* --- MODIFIED: Recent Activity & Health Insights --- */}
-      <section className="py-12 bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-slate-800">
-        <div className="container mx-auto px-4">
-          <div className="grid lg:grid-cols-2 gap-8">
-            
-            {/* Recent Activity */}
-            <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Recent Activity</h3>
-                <NavLink to="/dashboard" className="text-sm text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                  View all
-                </NavLink>
-              </div>
-              <div className="space-y-3">
-                
-                {/* --- NEW: Dynamic Content --- */}
-                {isLoading ? (
-                  <p className="text-sm text-slate-600 dark:text-slate-400">Loading activity...</p>
-                ) : (
-                  activity.map((item) => {
-                    const style = activityIcons[item.type] || activityIcons.default;
-                    return (
-                      <div key={item.id} className={`flex items-center gap-3 p-3 rounded-lg ${style.bgClass}`}>
-                        <div className={`w-8 h-8 rounded-full ${style.iconBgClass} flex items-center justify-center flex-shrink-0`}>
-                          {style.icon}
+      {/* --- MODIFIED: Recent Activity & Health Insights (Only for authenticated users) --- */}
+      {currentUser && (
+        <section className="py-12 bg-gradient-to-r from-slate-50 to-blue-50 dark:from-slate-900 dark:to-slate-800">
+          <div className="container mx-auto px-4">
+            <div className="grid lg:grid-cols-2 gap-8">
+              
+              {/* Recent Activity */}
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Recent Activity</h3>
+                  <NavLink to="/dashboard" className="text-sm text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                    View all
+                  </NavLink>
+                </div>
+                <div className="space-y-3">
+                  
+                  {/* --- NEW: Dynamic Content --- */}
+                  {isLoading ? (
+                    <p className="text-sm text-slate-600 dark:text-slate-400">Loading activity...</p>
+                  ) : (
+                    activity.map((item) => {
+                      const style = activityIcons[item.type] || activityIcons.default;
+                      return (
+                        <div key={item.id} className={`flex items-center gap-3 p-3 rounded-lg ${style.bgClass}`}>
+                          <div className={`w-8 h-8 rounded-full ${style.iconBgClass} flex items-center justify-center flex-shrink-0`}>
+                            {style.icon}
+                          </div>
+                          <div className="flex-1">
+                            <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.title}</div>
+                            <div className="text-xs text-slate-600 dark:text-slate-400">{item.timestamp}</div>
+                          </div>
                         </div>
-                        <div className="flex-1">
-                          <div className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.title}</div>
-                          <div className="text-xs text-slate-600 dark:text-slate-400">{item.timestamp}</div>
+                      );
+                    })
+                  )}
+                  {/* --- End of Dynamic Content --- */}
+                  
+                </div>
+              </div>
+
+              {/* Health Insights Preview */}
+              <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Health Insights</h3>
+                  <NavLink to="/dashboard" className="text-sm text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
+                    View details
+                  </NavLink>
+                </div>
+                <div className="space-y-4">
+
+                  {/* --- NEW: Dynamic Content --- */}
+                  {isLoading || !insights ? (
+                    <p className="text-sm text-slate-600 dark:text-slate-400">Loading insights...</p>
+                  ) : (
+                    <>
+                      {/* Wellness Score */}
+                      <div className="p-4 rounded-lg bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
+                          <span className="text-sm font-medium text-slate-900 dark:text-slate-100">Wellness Score</span>
+                        </div>
+                        <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
+                          {insights.wellnessScore.score}/{insights.wellnessScore.total}
+                        </div>
+                        <div className="text-xs text-slate-600 dark:text-slate-400">
+                          {insights.wellnessScore.label}
                         </div>
                       </div>
-                    );
-                  })
-                )}
-                {/* --- End of Dynamic Content --- */}
-                
-              </div>
-            </div>
+                      {/* Trend Analysis */}
+                      <div className="p-4 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-blue-500"></div>
+                          <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                            {insights.trendAnalysis.label}
+                          </span>
+                        </div>
+                        <div className="text-sm text-slate-600 dark:text-slate-400">
+                          {insights.trendAnalysis.description}
+                        </div>
+                      </div>
+                      {/* Recommendation */}
+                      <div className="p-4 rounded-lg bg-gradient-to-r from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20">
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="w-2 h-2 rounded-full bg-orange-500"></div>
+                          <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
+                            {insights.recommendation.label}
+                          </span>
+                        </div>
+                        <div className="text-sm text-slate-600 dark:text-slate-400">
+                          {insights.recommendation.description}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                  {/* --- End of Dynamic Content --- */}
 
-            {/* Health Insights Preview */}
-            <div className="bg-white dark:bg-slate-800 rounded-2xl p-6 shadow-sm border border-slate-200 dark:border-slate-700">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">Health Insights</h3>
-                <NavLink to="/dashboard" className="text-sm text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300">
-                  View details
-                </NavLink>
-              </div>
-              <div className="space-y-4">
-
-                {/* --- NEW: Dynamic Content --- */}
-                {isLoading || !insights ? (
-                  <p className="text-sm text-slate-600 dark:text-slate-400">Loading insights...</p>
-                ) : (
-                  <>
-                    {/* Wellness Score */}
-                    <div className="p-4 rounded-lg bg-gradient-to-r from-emerald-50 to-teal-50 dark:from-emerald-900/20 dark:to-teal-900/20">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-2 h-2 rounded-full bg-emerald-500"></div>
-                        <span className="text-sm font-medium text-slate-900 dark:text-slate-100">Wellness Score</span>
-                      </div>
-                      <div className="text-2xl font-bold text-emerald-600 dark:text-emerald-400">
-                        {insights.wellnessScore.score}/{insights.wellnessScore.total}
-                      </div>
-                      <div className="text-xs text-slate-600 dark:text-slate-400">
-                        {insights.wellnessScore.label}
-                      </div>
-                    </div>
-                    {/* Trend Analysis */}
-                    <div className="p-4 rounded-lg bg-gradient-to-r from-blue-50 to-indigo-50 dark:from-blue-900/20 dark:to-indigo-900/20">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-2 h-2 rounded-full bg-blue-500"></div>
-                        <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                          {insights.trendAnalysis.label}
-                        </span>
-                      </div>
-                      <div className="text-sm text-slate-600 dark:text-slate-400">
-                        {insights.trendAnalysis.description}
-                      </div>
-                    </div>
-                    {/* Recommendation */}
-                    <div className="p-4 rounded-lg bg-gradient-to-r from-orange-50 to-red-50 dark:from-orange-900/20 dark:to-red-900/20">
-                      <div className="flex items-center gap-2 mb-2">
-                        <div className="w-2 h-2 rounded-full bg-orange-500"></div>
-                        <span className="text-sm font-medium text-slate-900 dark:text-slate-100">
-                          {insights.recommendation.label}
-                        </span>
-                      </div>
-                      <div className="text-sm text-slate-600 dark:text-slate-400">
-                        {insights.recommendation.description}
-                      </div>
-                    </div>
-                  </>
-                )}
-                {/* --- End of Dynamic Content --- */}
-
+                </div>
               </div>
             </div>
           </div>
-        </div>
-      </section>
+        </section>
+      )}
 
       {/* Get Started Guide */}
       <section className="py-12">

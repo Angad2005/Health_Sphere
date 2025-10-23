@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Auth Test</title>
+</head>
+<body>
+    <h1>Authentication Test</h1>
+    <div id="status">Testing...</div>
+    
+    <script>
+        async function testAuth() {
+            const status = document.getElementById('status');
+            
+            try {
+                // Test if backend is running
+                const response = await fetch('http://localhost:8080/', {
+                    credentials: 'include'
+                });
+                
+                if (response.ok) {
+                    const data = await response.json();
+                    status.innerHTML = `✅ Backend running: ${data.message}`;
+                } else {
+                    status.innerHTML = `❌ Backend error: ${response.status}`;
+                }
+            } catch (error) {
+                status.innerHTML = `❌ Backend not running: ${error.message}`;
+            }
+        }
+        
+        testAuth();
+    </script>
+</body>
+</html>
+

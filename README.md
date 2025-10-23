@@ -27,10 +27,10 @@ A comprehensive healthcare-focused application that provides AI-powered diagnost
 - **Chart.js & Recharts** for data visualization
 
 ### Backend
-- **Node.js/Express** API server
-- **Multi-agent system** for specialized healthcare tasks
-- **Google Cloud Services** integration (Gemini, Maps, Vision)
-- **Firebase** for authentication and data storage
+- **Flask/Python** API server with SQLite database
+- **Session-based authentication** with secure cookies
+- **RESTful API** endpoints for health data management
+- **CORS-enabled** for React frontend integration
 
 ### AI/ML Layer
 - **Python-based models** for diagnosis and risk assessment
@@ -178,20 +178,19 @@ This section describes the AI/ML architecture, datasets, training/evaluation wor
 
 2. **Install dependencies**
    ```bash
-   # Install root dependencies
-   npm install
+   # Run the setup script (recommended)
+   ./setup.sh
    
-   # Install backend dependencies
-   cd backend && npm install
-   
-   # Install frontend dependencies
-   cd ../frontend && npm install
-   
-   # Install Python dependencies
-   cd ../backend/models
-   python -m venv .venv
-   source .venv/bin/activate  # Windows: .venv\Scripts\activate
+   # Or install manually:
+   # Backend (Python/Flask)
+   cd backend
+   python3 -m venv venv
+   source venv/bin/activate  # Windows: venv\Scripts\activate
    pip install -r requirements.txt
+   
+   # Frontend (React)
+   cd ../frontend
+   npm install
    ```
 
    Note:
@@ -223,20 +222,17 @@ This section describes the AI/ML architecture, datasets, training/evaluation wor
 
 4. **Start the application**
    ```bash
-   # Start all services
-   npm run start:all
+   # Terminal 1: Start Flask backend
+   cd backend
+   source venv/bin/activate  # Windows: venv\Scripts\activate
+   python run.py
    
-   # Or start individually:
-   # Backend only
-   npm run start:backend
-   
-   # Frontend only  
-   npm run start:frontend
-   
-   # Python AI service
-   cd backend/models
-   uvicorn ai_service.main:app --reload --port 8090
+   # Terminal 2: Start React frontend
+   cd frontend
+   npm run dev
    ```
+   
+   Then open http://localhost:5173 in your browser
 
 ## 📁 Project Structure
 
@@ -344,20 +340,14 @@ Notes:
 
 ## 📦 Dependencies Overview
 
-### Backend (Node.js)
-- express ^4.19.2
-- cors ^2.8.5
-- helmet ^7.1.0
-- express-rate-limit ^7.4.0
-- axios ^1.7.7
-- multer ^1.4.5-lts.1
-- dotenv ^16.4.5
-- zod ^3.23.8
-- @google-cloud/vision ^4.3.2
-- pdf-parse ^1.1.1
+### Backend (Python/Flask)
+- Flask==3.0.0
+- Flask-CORS==4.0.0
+- bcrypt==4.1.2
+- python-dotenv==1.0.0
 
-Dev:
-- nodemon ^3.1.7
+Database:
+- SQLite (auth.db, app.db)
 
 ### Frontend (React/Vite)
 - react ^18.3.1, react-dom ^18.3.1

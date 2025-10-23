@@ -23,7 +23,8 @@ export function AuthProvider({ children }) {
 
   const fetchCurrentUser = useCallback(async () => {
     try {
-      const user = await getCurrentUser();
+      const response = await getCurrentUser();
+      const user = response.user || response; // Handle both formats
       setCurrentUser(user);
     } catch (err) {
       console.error("Auth check failed:", err);
@@ -35,7 +36,8 @@ export function AuthProvider({ children }) {
 
   const login = async (credentials) => {
     try {
-      const user = await apiLogin(credentials.email, credentials.password);
+      const response = await apiLogin(credentials.email, credentials.password);
+      const user = response.user || response; // Handle both formats
       setCurrentUser(user);
       return user;
     } catch (error) {
@@ -46,7 +48,8 @@ export function AuthProvider({ children }) {
 
   const signup = async (credentials) => {
     try {
-      const user = await apiSignup(credentials.email, credentials.password);
+      const response = await apiSignup(credentials.email, credentials.password);
+      const user = response.user || response; // Handle both formats
       setCurrentUser(user);
       return user;
     } catch (error) {
@@ -63,6 +66,7 @@ export function AuthProvider({ children }) {
       // Continue with logout even if API fails
     } finally {
       setCurrentUser(null);
+      setLoading(false);
     }
   };
 

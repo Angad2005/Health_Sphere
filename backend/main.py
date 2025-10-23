@@ -25,7 +25,12 @@ app.config.update(
 )
 
 # Enable CORS with credentials for session-based auth
-CORS(app, supports_credentials=True)
+# Allow frontend on localhost:5173 (Vite dev server) and localhost:3000
+CORS(app, 
+     supports_credentials=True,
+     origins=['http://localhost:5173', 'http://localhost:3000', 'http://127.0.0.1:5173', 'http://127.0.0.1:3000'],
+     allow_headers=['Content-Type', 'Authorization'],
+     methods=['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'])
 
 # --- Database Configuration ---
 AUTH_DB_PATH = os.getenv('AUTH_DATABASE_PATH', 'data/auth.db')
@@ -469,6 +474,123 @@ def get_checkins():
             continue
             
     return jsonify(checkins)
+
+# --- Missing API Endpoints ---
+@app.route('/functions/riskSeries')
+@require_auth
+def get_risk_series():
+    user_id = get_user_id()
+    with get_app_db() as conn:
+        cur = conn.execute(
+            'SELECT date, answers FROM daily_checkins WHERE user_id = ? ORDER BY date DESC LIMIT 30',
+            (user_id,)
+        )
+        rows = cur.fetchall()
+    
+    risk_data = []
+    for row in rows:
+        try:
+            answers = json.loads(row['answers'])
+            # Calculate a simple risk score from answers
+            score = 0
+            count = 0
+            for val in answers.values():
+                if isinstance(val, (int, float)) and 0 <= val <= 5:
+                    score += val
+                    count += 1
+            if count > 0:
+                risk_data.append({
+                    "date": row['date'],
+                    "risk_score": min(100, max(0, int((score / count / 5) * 100)))
+                })
+        except (json.JSONDecodeError, TypeError):
+            continue
+    
+    return jsonify(risk_data)
+
+@app.route('/functions/submitFeedback', methods=['POST'])
+@require_auth
+def submit_feedback():
+    user_id = get_user_id()
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+        
+    feedback = data.get('feedback', '')
+    if not feedback.strip():
+        return jsonify({"error": "Feedback is required"}), 400
+    
+    feedback_id = str(uuid.uuid4())
+    with get_app_db() as conn:
+        conn.execute(
+            'INSERT INTO feedback (id, user_id, feedback, created_at) VALUES (?, ?, ?, ?)',
+            (feedback_id, user_id, feedback, datetime.utcnow().isoformat())
+        )
+    
+    return jsonify({"ok": True, "feedbackId": feedback_id})
+
+@app.route('/functions/findNearbyAmbulance')
+@require_auth
+def find_nearby_ambulance():
+    lat = request.args.get('lat', type=float)
+    lng = request.args.get('lng', type=float)
+    radius = request.args.get('radiusMeters', 5000, type=int)
+    
+    if not lat or not lng:
+        return jsonify({"error": "Latitude and longitude are required"}), 400
+    
+    # Mock ambulance data - in real app, integrate with Google Maps API
+    mock_ambulances = [
+        {
+            "id": "amb-1",
+            "name": "City Emergency Services",
+            "distance": "0.8 km",
+            "phone": "+1-555-0123",
+            "eta": "5-8 minutes"
+        },
+        {
+            "id": "amb-2", 
+            "name": "Metro Ambulance",
+            "distance": "1.2 km",
+            "phone": "+1-555-0456",
+            "eta": "8-12 minutes"
+        }
+    ]
+    
+    return jsonify({
+        "ambulances": mock_ambulances,
+        "count": len(mock_ambulances)
+    })
+
+@app.route('/functions/generateReportSummary', methods=['POST'])
+@require_auth
+def generate_report_summary():
+    data = request.get_json()
+    if not data:
+        return jsonify({"error": "Invalid JSON"}), 400
+        
+    extracted_data = data.get('extractedData', {})
+    ocr_text = data.get('ocrText', '')
+    
+    # Mock AI analysis - in real app, integrate with AI service
+    summary = {
+        "summary": "Medical report analysis completed. Key findings include normal vital signs and minor inflammation markers.",
+        "keyFindings": [
+            "Blood pressure: 120/80 mmHg (normal)",
+            "Heart rate: 72 bpm (normal)", 
+            "Temperature: 98.6°F (normal)",
+            "Mild inflammation detected in blood work"
+        ],
+        "recommendations": [
+            "Continue current medication regimen",
+            "Schedule follow-up in 3 months",
+            "Monitor blood pressure weekly"
+        ],
+        "riskLevel": "Low",
+        "confidence": 0.85
+    }
+    
+    return jsonify(summary)
 
 @app.route('/')
 def hello():

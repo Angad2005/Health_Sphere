@@ -6,6 +6,7 @@ import Button from '../components/ui/Button';
 import { Card, CardContent } from '../components/ui/Card';
 import { useNavigate, useLocation, Link } from 'react-router-dom';
 import { useToast } from '../components/ui/ToastProvider';
+import { useAuth } from '../context/AuthContext';
 
 export default function SignupPage() {
   const [email, setEmail] = useState('');
@@ -14,6 +15,7 @@ export default function SignupPage() {
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState('');
   const { notify } = useToast();
+  const { currentUser, signup, loading } = useAuth();
 
   const navigate = useNavigate();
   const location = useLocation();
@@ -21,20 +23,10 @@ export default function SignupPage() {
 
   // Redirect if already authenticated
   useEffect(() => {
-    const checkAuth = async () => {
-      try {
-        const res = await fetch('http://localhost:8080/api/auth/me', {
-          credentials: 'include',
-        });
-        if (res.ok) {
-          navigate(from, { replace: true });
-        }
-      } catch (err) {
-        // Stay on signup page if not authenticated
-      }
-    };
-    checkAuth();
-  }, [from, navigate]);
+    if (currentUser && !loading) {
+      navigate(from, { replace: true });
+    }
+  }, [currentUser, loading, from, navigate]);
 
   const handleSignup = async (e) => {
     e.preventDefault();
@@ -42,28 +34,14 @@ export default function SignupPage() {
     setSubmitting(true);
 
     try {
-      const res = await fetch('http://localhost:8080/api/auth/signup', {
-        method: 'POST',
-        credentials: 'include',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          email: email.trim().toLowerCase(),
-          password,
-        }),
+      await signup({
+        email: email.trim().toLowerCase(),
+        password,
       });
-
-      const data = await res.json();
-
-      if (res.ok && data.ok) {
-        notify('Account created! Redirecting to dashboard...', 'success');
-        navigate(from, { replace: true });
-      } else {
-        const message = data.error || 'Failed to create account. Please try again.';
-        setError(message);
-        notify(message, 'error');
-      }
+      notify('Account created! Redirecting to dashboard...', 'success');
+      navigate(from, { replace: true });
     } catch (err) {
-      const message = 'Network error. Please check your connection.';
+      const message = err.message || 'Failed to create account. Please try again.';
       setError(message);
       notify(message, 'error');
     } finally {
