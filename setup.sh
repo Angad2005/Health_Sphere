@@ -38,7 +38,7 @@ echo ""
 echo "1. Start the Flask backend:"
 echo "   cd backend"
 echo "   source venv/bin/activate"
-echo "   python run.py"
+echo "   python main.py"
 echo ""
 echo "2. Start the React frontend (in a new terminal):"
 echo "   cd frontend"
@@ -47,4 +47,7 @@ echo ""
 echo "3. Open http://localhost:5173 in your browser"
 echo ""
 echo "📝 Note: The backend runs on port 8080, frontend on port 5173"
+
+
+
 

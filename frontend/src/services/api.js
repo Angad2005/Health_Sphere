@@ -1,5 +1,6 @@
 // src/services/api.js
 // Vite-compatible API client for Flask backend (SESSION-BASED AUTH)
+// ✅ UPDATED: Full LM Studio LLM Integration
 
 const isDev = import.meta.env.DEV;
 const BASE = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL || '').replace(/\/$/, '');
@@ -8,7 +9,6 @@ const BASE = (import.meta.env.VITE_API_BASE || import.meta.env.VITE_API_BASE_URL
  * Wrapper for JSON fetch with session credentials and error handling
  */
 async function jsonFetch(url, options = {}) {
-  // ALWAYS include credentials for session-based auth
   const res = await fetch(url, {
     ...options,
     credentials: 'include', // ← CRITICAL: sends session cookie
@@ -48,7 +48,7 @@ export async function analyze(body) {
 
 export async function aiHealth() {
   const res = await fetch(`${BASE}/api/ai/health`, {
-    credentials: 'include', // ← Include for consistency
+    credentials: 'include',
   });
   return res.json();
 }
@@ -60,15 +60,14 @@ export async function pdfExtract(url, { useOcr = false, lang = 'en' } = {}) {
   });
 }
 
+// ✅ UPDATED: Now returns FULL LLM STRUCTURED ANALYSIS
 export async function processReport(file) {
   const formData = new FormData();
   formData.append('file', file);
 
-  // For multipart/form-data, DON'T set Content-Type (browser sets it with boundary)
   const res = await fetch(`${BASE}/functions/processReport`, {
     method: 'POST',
-    credentials: 'include', // ← CRITICAL
-    // No Content-Type header for FormData
+    credentials: 'include',
   });
 
   const text = await res.text();
@@ -87,7 +86,7 @@ export async function processReport(file) {
   return json;
 }
 
-// Progress-capable upload with session credentials
+// ✅ UPDATED: Progress-capable upload → Returns LLM analysis directly
 export function processReportWithProgress(file, { onProgress, signal } = {}) {
   return new Promise((resolve, reject) => {
     const xhr = new XMLHttpRequest();
@@ -95,7 +94,7 @@ export function processReportWithProgress(file, { onProgress, signal } = {}) {
     form.append('file', file);
 
     xhr.open('POST', `${BASE}/functions/processReport`, true);
-    xhr.withCredentials = true; // ← Equivalent to credentials: 'include' for XHR
+    xhr.withCredentials = true;
 
     if (xhr.upload && typeof onProgress === 'function') {
       xhr.upload.onprogress = (evt) => {
@@ -111,6 +110,7 @@ export function processReportWithProgress(file, { onProgress, signal } = {}) {
         if (xhr.status >= 200 && xhr.status < 300) {
           try {
             const json = JSON.parse(xhr.responseText || '{}');
+            // ✅ Backend now returns: { ocr, extracted, llm_analysis }
             resolve(json);
           } catch {
             resolve({ ok: true });
@@ -147,6 +147,7 @@ export function processReportWithProgress(file, { onProgress, signal } = {}) {
   });
 }
 
+// ✅ UPDATED: Now uses LLM analysis from daily_checkins.llm_analysis
 export async function analyzeCheckinApi(payload) {
   return jsonFetch(`${BASE}/functions/analyzeCheckin`, {
     method: 'POST',
@@ -169,7 +170,8 @@ export async function submitFeedback(feedback) {
   });
 }
 
-export async function chatWithGeminiApi(payload, { signal } = {}) {
+// ✅ UPDATED: LM Studio LLM Chat (renamed from Gemini)
+export async function chatWithLlmApi(payload, { signal } = {}) {
   return jsonFetch(`${BASE}/functions/chat`, {
     method: 'POST',
     body: JSON.stringify(payload),
@@ -177,20 +179,43 @@ export async function chatWithGeminiApi(payload, { signal } = {}) {
   });
 }
 
+// ✅ UPDATED: Now pulls real risk_score from llm_analysis JSON
 export async function fetchRiskSeries() {
-  // No userId needed - Flask gets it from session
   return jsonFetch(`${BASE}/functions/riskSeries`);
 }
 
-// Fetch user check-ins (no userId needed - Flask uses session)
+// ✅ UPDATED: Now returns llm_analysis & questions from database
 export async function fetchCheckins(limit = 30) {
   const url = new URL(`${BASE}/api/checkins`);
   url.searchParams.set('limit', String(limit));
   return jsonFetch(url.toString());
 }
 
+// ✅ NEW: Generate personalized daily check-in questions
+export async function generateCheckinQuestions() {
+  return jsonFetch(`${BASE}/api/generate-questions`);
+}
+
+// ✅ ALIAS: For backward compatibility
+export const generateQuestionsApi = generateCheckinQuestions;
+
+// ✅ NEW: Get detailed report analysis by upload_id
+export async function getReportAnalysis(uploadId) {
+  return jsonFetch(`${BASE}/api/report-analysis/${uploadId}`);
+}
+
+// ✅ NEW: Get chat history
+export async function getChatHistory(limit = 20) {
+  const url = new URL(`${BASE}/api/chat-history`);
+  url.searchParams.set('limit', String(limit));
+  return jsonFetch(url.toString());
+}
+
+// ✅ REMOVED: Old generateReportSummary - processReport now returns LLM analysis directly
+// This is kept for backward compatibility but DEPRECATED
 export async function generateReportSummary(extractedData, ocrText) {
-  return jsonFetch(`${BASE}/functions/generateReportSummary`, {
+  console.warn('generateReportSummary is DEPRECATED - use processReportWithProgress instead');
+  return jsonFetch(`${BASE}/functions/processReport`, {
     method: 'POST',
     body: JSON.stringify({ extractedData, ocrText }),
   });
@@ -220,3 +245,43 @@ export async function logout() {
 export async function getCurrentUser() {
   return jsonFetch(`${BASE}/api/auth/me`);
 }
+
+// ✅ NEW: LLM-SPECIFIC ENDPOINTS
+export const llmApi = {
+  // Daily check-in questions
+  generateQuestions: generateCheckinQuestions,
+  
+  // Report analysis
+  getAnalysis: getReportAnalysis,
+  
+  // Chat
+  chat: chatWithLlmApi,
+  history: getChatHistory,
+};
+
+// ✅ EXPORT SUMMARY FOR EASY IMPORTS
+export const api = {
+  // Core
+  processReport,
+  processReportWithProgress,
+  analyzeCheckinApi,
+  
+  // LLM Features
+  ...llmApi,
+  
+  // Legacy
+  //chatWithGeminiApi, // ← Keep for backward compatibility
+  generateReportSummary, // ← DEPRECATED
+  
+  // Data
+  fetchCheckins,
+  fetchRiskSeries,
+  
+  // Auth
+  login,
+  signup,
+  logout,
+  getCurrentUser,
+};
+
+export default api;

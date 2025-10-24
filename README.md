@@ -225,7 +225,7 @@ This section describes the AI/ML architecture, datasets, training/evaluation wor
    # Terminal 1: Start Flask backend
    cd backend
    source venv/bin/activate  # Windows: venv\Scripts\activate
-   python run.py
+   python main.py
    
    # Terminal 2: Start React frontend
    cd frontend

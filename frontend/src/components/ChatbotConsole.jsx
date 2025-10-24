@@ -1,13 +1,11 @@
 import React, { useMemo, useRef, useState, useEffect } from 'react';
-import { chatWithGeminiApi } from '../services/api';
+import { chatWithLlmApi, getChatHistory, fetchCheckins } from '../services/api';
 import Button from './ui/Button';
 import Textarea from './ui/Textarea';
 import Spinner from './ui/Spinner';
 import { formatDate } from '../utils/formatDate';
 import { useAuth } from '../context/AuthContext';
 import { useToast } from './ui/ToastProvider';
-import { db } from '../firebase';
-import { collection, getDocs, orderBy, limit, query } from 'firebase/firestore';
 
 export default function ChatbotConsole({ compact = false }) {
   const { user } = useAuth();
@@ -36,39 +34,67 @@ export default function ChatbotConsole({ compact = false }) {
   const [useProfile, setUseProfile] = useState(false);
 
   useEffect(() => {
-    // load from localStorage on mount and when user changes
-    try {
-      const raw = localStorage.getItem(storageKey);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (Array.isArray(parsed)) setMessages(parsed);
-        else setMessages([]);
-      } else {
+    // load history on mount and when user changes
+    const loadData = async () => {
+      try {
+        if (user) {
+          // Load from backend for authenticated users
+          const history = await getChatHistory(user.uid);
+          const msgs = [];
+          for (const item of history) {
+            msgs.push({
+              role: 'user',
+              content: item.message,
+              createdAt: new Date(item.created_at).getTime() || Date.now()
+            });
+            msgs.push({
+              role: 'assistant',
+              content: item.response,
+              confidence: item.confidence_score,
+              suggested_actions: item.suggested_actions || [], // Assume API returns this or extract if needed
+              createdAt: new Date(item.created_at).getTime() || Date.now()
+            });
+          }
+          setMessages(msgs);
+        } else {
+          // Load from localStorage for anon
+          const raw = localStorage.getItem(storageKey);
+          if (raw) {
+            const parsed = JSON.parse(raw);
+            if (Array.isArray(parsed)) setMessages(parsed);
+            else setMessages([]);
+          } else {
+            setMessages([]);
+          }
+        }
+
+        const rawPref = localStorage.getItem(prefKey);
+        if (rawPref === 'true' || rawPref === 'false') setUseCheckins(rawPref === 'true');
+        else setUseCheckins(true);
+        const rawAll = localStorage.getItem(prefAllKey);
+        if (rawAll === 'true' || rawAll === 'false') setUseAllCheckins(rawAll === 'true');
+        else setUseAllCheckins(false);
+        const rawProfile = localStorage.getItem(prefProfileKey);
+        if (rawProfile === 'true' || rawProfile === 'false') setUseProfile(rawProfile === 'true');
+        else setUseProfile(true);
+      } catch (_) {
         setMessages([]);
       }
-      const rawPref = localStorage.getItem(prefKey);
-      if (rawPref === 'true' || rawPref === 'false') setUseCheckins(rawPref === 'true');
-      else setUseCheckins(true);
-      const rawAll = localStorage.getItem(prefAllKey);
-      if (rawAll === 'true' || rawAll === 'false') setUseAllCheckins(rawAll === 'true');
-      else setUseAllCheckins(false);
-      const rawProfile = localStorage.getItem(prefProfileKey);
-      if (rawProfile === 'true' || rawProfile === 'false') setUseProfile(rawProfile === 'true');
-      else setUseProfile(true);
-    } catch (_) {
-      setMessages([]);
-    }
-    // reset expanded states on user change
-    setExpandedIds({});
-  }, [storageKey, prefKey, prefAllKey]);
+      // reset expanded states on user change
+      setExpandedIds({});
+    };
+    loadData();
+  }, [user?.uid, storageKey, prefKey, prefAllKey, prefProfileKey]);
 
   useEffect(() => {
     listRef.current?.scrollTo({ top: listRef.current.scrollHeight });
-    // persist to localStorage
-    try {
-      localStorage.setItem(storageKey, JSON.stringify(messages));
-    } catch (_) {}
-  }, [messages, storageKey]);
+    // persist to localStorage only for anon users
+    if (!user) {
+      try {
+        localStorage.setItem(storageKey, JSON.stringify(messages));
+      } catch (_) {}
+    }
+  }, [messages, storageKey, user]);
 
   useEffect(() => {
     const el = listRef.current;
@@ -94,10 +120,6 @@ export default function ChatbotConsole({ compact = false }) {
   }, [useProfile, prefProfileKey]);
 
   const canSend = useMemo(() => input.trim().length > 0 && !loading, [input, loading]);
-  const keyMissing = useMemo(() => {
-    const lastAssistant = [...messages].reverse().find(m => m.role === 'assistant');
-    return !!(lastAssistant && typeof lastAssistant.content === 'string' && lastAssistant.content.toLowerCase().includes('gemini api key missing'));
-  }, [messages]);
 
   async function send() {
     if (!canSend) return;
@@ -113,34 +135,28 @@ export default function ChatbotConsole({ compact = false }) {
     setInput('');
     setLoading(true);
     try {
-      // Optional client-side fallback: include compact recent check-ins if available
+      // Fetch recent check-ins from backend API
       let clientCheckins = [];
-      if (db && user && useCheckins) {
+      if (user && useCheckins) {
         try {
-          const ref = collection(db, 'users', user.uid, 'dailyCheckins');
-          const qy = query(ref, orderBy('date', 'desc'), limit(useAllCheckins ? 365 : 7));
-          const snap = await getDocs(qy);
-          clientCheckins = snap.docs.map(d => {
-            const data = d.data() || {};
-            let iso = '';
-            try { iso = data?.date?.toDate ? data.date.toDate().toISOString().slice(0,10) : (data?.date?._seconds ? new Date(data.date._seconds * 1000).toISOString().slice(0,10) : ''); } catch (_) { iso = ''; }
-            return {
-              id: d.id,
-              date: iso,
-              answers: data.answers,
-              notes: data.notes || null
-            };
-          });
+          clientCheckins = await fetchCheckins(useAllCheckins ? 365 : 7);
         } catch (_) {
           clientCheckins = [];
         }
       }
-      const payload = { messages: nextMessages, options: { maxOutputTokens: 512, useCheckins, checkinLimit: 7, useAllCheckins, checkinMax: 365, useProfile, userId: user?.uid || undefined, clientCheckins } };
+      const payload = {
+        user_id: user?.uid,
+        message: input,
+        context: { conversation_history: messages },
+        options: { useCheckins, checkinLimit: 7, useAllCheckins, checkinMax: 365, useProfile, clientCheckins }
+      };
       const abort = new AbortController();
       setController(abort);
-      const data = await chatWithGeminiApi(payload, { signal: abort.signal });
-      const reply = data?.data?.error || data?.data?.reply || '...';
-      setMessages(m => m.concat({ role: 'assistant', content: reply, createdAt: Date.now() }));
+      const data = await chatWithLlmApi(payload, { signal: abort.signal });
+      const reply = data?.response || data?.error || '...';
+      const confidence = data?.confidence || null;
+      const suggested_actions = data?.suggested_actions || [];
+      setMessages(m => m.concat({ role: 'assistant', content: reply, confidence, suggested_actions, createdAt: Date.now() }));
     } catch (e) {
       console.error('chat error:', e);
       const message = e?.message || 'Network error';
@@ -268,17 +284,12 @@ export default function ChatbotConsole({ compact = false }) {
 
   return (
     <div className={`${compact ? 'flex h-full flex-col gap-0' : 'flex flex-col gap-3'}`}>
-      {keyMissing && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 text-amber-900 dark:border-amber-800 dark:bg-amber-950/50 dark:text-amber-200 px-3 py-2 text-xs">
-          Gemini API key is not configured on the backend. Set <code>GEMINI_API_KEY</code> and restart the server.
-        </div>
-      )}
       {!compact && (
         <div className="flex items-center justify-between">
           <div className="text-sm text-slate-600 dark:text-slate-300">
             <span className="inline-flex items-center gap-2">
               <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-              Gemini · Online
+              Health AI · Local
             </span>
           </div>
           <div className="flex items-center gap-2">
@@ -335,6 +346,21 @@ export default function ChatbotConsole({ compact = false }) {
                           </div>
                         ) : (
                           <div className="break-words whitespace-pre-wrap">{m.content}</div>
+                        )}
+                        {m.role === 'assistant' && m.suggested_actions && m.suggested_actions.length > 0 && (
+                          <div className="mt-2">
+                            <strong>Suggested Actions:</strong>
+                            <ul className="list-disc pl-5 space-y-1 text-sm">
+                              {m.suggested_actions.map((action, idx) => (
+                                <li key={idx}>{action}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                        {m.role === 'assistant' && m.confidence !== null && (
+                          <span className="block mt-2 text-xs text-slate-500 dark:text-slate-400">
+                            Confidence: {(m.confidence * 100).toFixed(0)}%
+                          </span>
                         )}
                         {isLong && !isExpanded ? (
                           <div className="pointer-events-none absolute bottom-0 left-0 right-0 h-8 bg-gradient-to-t from-slate-100/90 dark:from-slate-900/80 to-transparent rounded-b-2xl" />
@@ -478,5 +504,3 @@ export default function ChatbotConsole({ compact = false }) {
     </div>
   );
 }
-
-
