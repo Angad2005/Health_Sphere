@@ -8,6 +8,8 @@
 
 A comprehensive healthcare-focused application that provides AI-powered diagnostic assistance, conversational triage, and human-in-the-loop feedback systems for clinicians and patients.
 
+Developer's Improvement Note:- Made full-Backend with local LLM integrations and all AI features pipelined to simple API calls which can support whatever moodel sits perfect in your own local GPU
+
 ## 🌟 Features
 
 - **🤖 Conversational AI Triage**: Intelligent chatbot powered by Google Gemini for patient guidance
